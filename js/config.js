@@ -8,15 +8,15 @@
 export const ENV_LABEL = "Test copy";   // shown in the header; set to "" for production
 
 export const TABLE_LINKS = {
-  universe:    "https://mineskiglobal.sg.larksuite.com/base/G9bKbukuFaJ44vsoU57lCPHbg8c?table=tblAVYlfBM4c3dye&view=vewFlJYfpR",
-  collections: "https://mineskiglobal.sg.larksuite.com/base/G9bKbukuFaJ44vsoU57lCPHbg8c?table=tbljEAI7BMgeoTsJ&view=vewZ7gtj5w",
-  brief:       "https://mineskiglobal.sg.larksuite.com/base/G9bKbukuFaJ44vsoU57lCPHbg8c?table=tblXSU7kMtmEXrAm&view=vewL6Eydfw",
-  par:         "https://mineskiglobal.sg.larksuite.com/base/NP7TbjwHNaTyLOsWafelN9wNgEd?table=tblFrfsaJZrLLpLQ&view=vewH1nekbn",
-  invoice:     "https://mineskiglobal.sg.larksuite.com/base/G9bKbukuFaJ44vsoU57lCPHbg8c?table=tblgs529pwF0klFU&view=vewO7Hk4IE",
+  universe:    "https://mineskiglobal.larksuite.com/base/NP7TbjwHNaTyLOsWafelN9wNgEd?table=tblEmWYOXoAF70uf&view=vewFlJYfpR",
+  collections: "https://mineskiglobal.larksuite.com/base/NP7TbjwHNaTyLOsWafelN9wNgEd?table=tbln7I51ONseeG55&view=vewZ7gtj5w",
+  brief:       "https://mineskiglobal.larksuite.com/base/DOoobrd5IaEIwjshAnuuuDFasjg?table=tbl56vIOXEoqDBV2&view=vewqnENgAr",
+  par:         "https://mineskiglobal.larksuite.com/base/DOoobrd5IaEIwjshAnuuuDFasjg?table=tbl7HyAEuiHa17Rl&view=vewKUWxTZV",
+  invoice:     "https://mineskiglobal.larksuite.com/base/DOoobrd5IaEIwjshAnuuuDFasjg?table=tblUWkLEMI5ybr8u&view=vew539msyS",
   // ANDON (Project Management), test copy. Only users can open this Base (the
   // Lark app itself can't), so the Node checks skip it. Don't use the "ANDON 2026"
   // table in the base above: it's a synced, read-only mirror.
-  andon:       "https://mineskiglobal.sg.larksuite.com/base/RLYgblLpqaMGqcsZhW8lTjVQgne?table=tbl6sRVw8MfrpVWA&view=vewHoLkWTm",
+  andon:       "https://mineskiglobal.larksuite.com/base/DOoobrd5IaEIwjshAnuuuDFasjg?table=tblS77AM8iHOWd0s&view=vewxixKUQf",
 };
 
 export const RULES = {
