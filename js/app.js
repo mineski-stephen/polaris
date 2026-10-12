@@ -14,6 +14,7 @@ import {
 import * as auth from "./auth.js";
 import { createInbox } from "./inbox.js";
 import { createUniverse } from "./universe.js";
+import { createCollections } from "./collections.js";
 
 const tables = Object.fromEntries(Object.entries(TABLE_LINKS).map(([k, link]) => [k, parseBaseLink(link)]));
 const KEY = { theme: "polaris.theme", tab: "polaris.tab" };
@@ -82,11 +83,13 @@ const ctx = {
     "Business Unit": selectOptions(field("collections", "Business Unit")),
   }),
 };
+ctx.token = () => (auth.currentToken() || {}).access_token;
 const inbox = createInbox(ctx);
 const universe = createUniverse(ctx);
+const collections = createCollections(ctx);
 
 /* ======================= routes ======================= */
-const ROUTES = { "": "brief", briefs: "brief", pars: "par", invoices: "invoice", andon: "andon", universe: "universe", settings: "settings" };
+const ROUTES = { "": "brief", briefs: "brief", pars: "par", invoices: "invoice", andon: "andon", universe: "universe", collections: "collections", settings: "settings" };
 const parseRoute = () => ROUTES[(location.hash.match(/^#\/?([a-z]*)/) || [])[1] || ""] || "brief";
 
 function onRoute() {
@@ -98,7 +101,8 @@ function onRoute() {
   } else {
     S.view = "work";
     S.lastWork = location.hash;
-    if (r === "universe") S.show = "universe";
+    if (r === "universe") { S.show = "universe"; if (S.tab === "invoice") { S.tab = "brief"; } }
+    else if (r === "collections") { S.show = "universe"; S.tab = "invoice"; }
     else { S.tab = r; S.show = "inbox"; store("local", KEY.tab, r); }
   }
   $("#settingsBack").href = S.lastWork || "#/briefs";
@@ -116,6 +120,11 @@ function render() {
   if (S.view === "login") renderLogin();
   if (S.view === "work") {
     $("#workspace").dataset.show = S.show;
+    // The right-hand pane follows the tab: Collections beside Invoices, the Universe otherwise.
+    const side = S.tab === "invoice" ? "collections" : "universe";
+    $("#workspace").dataset.side = side;
+    $("#sideTab").textContent = side === "collections" ? "Collections" : "Universe";
+    $("#sideTab").href = `#/${side}`;
     for (const t of $$(".tab")) {
       const on = t.dataset.tab === (S.show === "universe" && !isSplit() ? "universe" : S.tab);
       t.setAttribute("aria-selected", String(on));
@@ -124,6 +133,7 @@ function render() {
     }
     inbox.render();
     universe.render();
+    collections.render();
   }
   if (S.view === "settings") renderSettings();
 }
@@ -219,6 +229,7 @@ async function loadData({ quiet = false } = {}) {
       S.stages[k] = { n, total };
       inbox.renderLoader();
       universe.renderLoader();
+      collections.renderLoader();
     });
     S.data = res.data;
     S.fields = res.fields;
@@ -256,6 +267,7 @@ function recompute() {
   S.pool = peoplePool(d.universe, d.brief);
   S.clients = [...new Set(uni.rows.map(r => r.client).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   S.statusOrder = selectOptions(field("universe", "Status"));
+  S.colStatusOrder = selectOptions(field("collections", "Status"));
 }
 
 /* The Universe again, straight from Lark, so the table shows what's really there. */
@@ -306,8 +318,8 @@ async function afterPush(c, res, payload, extra = {}) {
   }[c.kind];
   const n = Object.keys(res.written).length;
   const dest = { invoice: "collections", andon: "andon" }[c.kind] || "universe";
-  const view = dest === "universe" && !isSplit()
-    ? { action: "View", onAction: () => { location.hash = "#/universe"; } } : {};
+  const view = (dest === "universe" || dest === "collections") && !isSplit()
+    ? { action: "View", onAction: () => { location.hash = `#/${dest}`; } } : {};
   if (res.readBackError) {
     toast(title, { type: "warn", timeout: 0, detail: `Saved, but Polaris couldn't read it back to check it (${describe(res.readBackError)}). Check it in Lark.`,
                    link: { href: tables[dest].url, text: "Open in Lark" } });
@@ -317,8 +329,9 @@ async function afterPush(c, res, payload, extra = {}) {
                    link: { href: tables[dest].url, text: "Open in Lark" } });
   } else {
     toast(title, { type: "success", detail: `All ${n} field${n === 1 ? "" : "s"} checked in Lark.`,
-                   ...(dest !== "universe" ? { link: { href: tables[dest].url, text: `Open ${TABLE_TITLES[dest]}` } } : view) });
+                   ...(dest === "andon" ? { link: { href: tables[dest].url, text: `Open ${TABLE_TITLES[dest]}` } } : view) });
   }
+  if (dest === "collections") await collections.refresh(res.recordId);
   if (dest === "universe") {
     universe.highlight(res.recordId);
     await refreshUniverse();

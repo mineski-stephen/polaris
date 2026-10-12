@@ -27,7 +27,7 @@
     (function () {
       var v = window.POLARIS_BUILD = Date.now().toString(36);
       var files = ["js/config.js", "js/sync.js", "js/ops.js", "js/icons.js", "js/ui.js", "js/net.js",
-                   "js/auth.js", "js/inbox.js", "js/universe.js", "js/app.js"];
+                   "js/auth.js", "js/inbox.js", "js/universe.js", "js/collections.js", "js/app.js"];
       var map = { imports: {} };
       files.forEach(function (f) { map.imports[new URL(f, location.href).href] = new URL(f + "?v=" + v, location.href).href; });
       document.write('<link rel="stylesheet" href="css/app.css?v=' + v + '">');
@@ -100,7 +100,7 @@
         <a class="tab" role="tab" href="#/pars" data-tab="par">PARs <span class="count" data-count="par"></span></a>
         <a class="tab" role="tab" href="#/invoices" data-tab="invoice">Invoices <span class="count" data-count="invoice"></span></a>
         <a class="tab" role="tab" href="#/andon" data-tab="andon">ANDON <span class="count" data-count="andon"></span></a>
-        <a class="tab tab-universe" role="tab" href="#/universe" data-tab="universe">Universe</a>
+        <a class="tab tab-universe" role="tab" href="#/universe" data-tab="universe" id="sideTab">Universe</a>
       </nav>
 
       <section class="pane pane-inbox" aria-label="Inbox">
@@ -149,6 +149,30 @@
           <p class="empty" id="uniEmpty" hidden></p>
         </div>
         <p class="uni-foot" id="uniFoot"></p>
+      </section>
+
+      <section class="pane pane-universe pane-collections" aria-labelledby="colTitle">
+        <header class="uni-head">
+          <div class="uni-title">
+            <h2 id="colTitle">Collections</h2>
+            <p class="uni-sub" id="colSub"></p>
+          </div>
+          <div class="uni-tools">
+            <label class="search search-sm">
+              <span class="i" data-icon="search" aria-hidden="true"></span>
+              <span class="sr-only">Search Collections</span>
+              <input type="search" id="colSearch" placeholder="Search" autocomplete="off" spellcheck="false">
+            </label>
+            <a class="icon-btn" id="colOpen" target="_blank" rel="noopener" aria-label="Open Collections in Lark" title="Open in Lark">
+              <span class="i" data-icon="external" aria-hidden="true"></span>
+            </a>
+          </div>
+        </header>
+        <div class="uni-wrap">
+          <table class="uni coll" id="colTable"></table>
+          <div class="loader" id="colLoader" hidden></div>
+          <p class="empty" id="colEmpty" hidden></p>
+        </div>
       </section>
     </section>
 
@@ -209,6 +233,35 @@
       <footer class="modal-actions">
         <button type="button" class="btn btn-ghost" id="sheetCancel">Cancel</button>
         <button type="button" class="btn btn-primary" id="sheetGo"><span class="btn-label"></span></button>
+      </footer>
+    </form>
+  </dialog>
+
+  <!-- Invoice details (typed in by finance) ---------------------------------------->
+  <dialog class="modal" id="details" aria-labelledby="detailsTitle">
+    <form class="modal-form" id="detailsForm">
+      <header class="modal-head">
+        <h2 id="detailsTitle">Invoice details</h2>
+        <p class="modal-sub" id="detailsSub"></p>
+      </header>
+      <div class="modal-body">
+        <div class="field"><label class="label" for="dInvoiceNo">Invoice Number</label>
+          <input type="text" id="dInvoiceNo" autocomplete="off" placeholder="e.g. INV-1680"></div>
+        <div class="field"><label class="label" for="dSiNo">SI Number</label>
+          <input type="text" id="dSiNo" autocomplete="off" placeholder="e.g. 610"></div>
+        <div class="field"><label class="label" for="dDate">Invoice Date</label>
+          <input type="date" id="dDate"></div>
+        <div class="field"><span class="label">Invoice</span>
+          <ul class="files" id="dFiles"></ul>
+          <label class="btn btn-sm file-btn"><span class="i" data-icon="plus" aria-hidden="true"></span> Add a file
+            <input type="file" id="dFile" multiple hidden></label>
+          <p class="set-sub">PDF or image, up to 10 MB each. Files are uploaded when you save.</p>
+        </div>
+      </div>
+      <p class="form-error" id="detailsError" role="alert" hidden></p>
+      <footer class="modal-actions">
+        <button type="button" class="btn btn-ghost" id="detailsCancel">Cancel</button>
+        <button type="button" class="btn btn-primary" id="detailsSave"><span class="btn-label">Save details</span></button>
       </footer>
     </form>
   </dialog>

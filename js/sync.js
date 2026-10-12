@@ -256,7 +256,7 @@ export function parCards(pars, briefs, uni, pendingCodes, rules) {
 /* Invoice Requests not yet in Collections. One project can have many invoices,
    so "already there" means a Collections row carries this request number. */
 export function invoiceCards(invoices, uni, coll, pendingCodes, rules) {
-  const cards = [], hidden = emptyHidden();
+  const cards = [], hidden = { ...emptyHidden(), notApproved: 0 };
   for (const r of invoices) {
     const f = r.fields || {};
     if (clean(f["Initiator department"]) !== rules.department) { hidden.otherDept++; continue; }
@@ -265,6 +265,8 @@ export function invoiceCards(invoices, uni, coll, pendingCodes, rules) {
     if (reqNo && coll.irNos.has(reqNo)) { hidden.done++; continue; }
     const status = clean(f["Status"]);
     if (rules.voidStatuses.includes(status)) { hidden.void++; continue; }
+    // Only approved requests are real invoices; the rest wait until they're approved.
+    if (!(rules.invoiceStatuses || ["Approved"]).includes(status)) { hidden.notApproved++; continue; }
 
     const code = normCode(plain(f["Project Code"]));
     const inUniverse = !!code && uni.byCode.has(code);
@@ -537,6 +539,11 @@ export function verifyWritten(expected, actualFields) {
 }
 
 function sameValue(want, got) {
+  if (want === null) return got === null || got === undefined || got === "" || (Array.isArray(got) && !got.length);
+  if (Array.isArray(want) && want.every(x => x && "file_token" in x)) {   // attachments: compare tokens
+    const toks = (a) => (Array.isArray(a) ? a : []).map(x => x && x.file_token).filter(Boolean).sort().join(",");
+    return toks(want) === toks(got);
+  }
   if (Array.isArray(want)) {                                    // people: compare ids
     const ids = (a) => (Array.isArray(a) ? a : []).map(u => u && u.id).filter(Boolean).sort().join(",");
     return ids(want) === ids(got);
@@ -553,4 +560,68 @@ function show(v) {
   }
   if (typeof v === "number") return String(v);
   return plain(v) || "(empty)";
+}
+
+/* ======================= the Collections view ======================= */
+
+/* One Collections record as a table row. */
+export function collectionRow(r) {
+  const f = r.fields || {};
+  return {
+    id: r.record_id,
+    arName: clean(f["AR Name"]),
+    code: clean(f["Project Code"]),
+    amount: num(f["Invoice Amount"]),
+    currency: clean(f["Currency"]),
+    remarks: clean(f["Sales Remarks"]),
+    status: clean(f["Status"]),
+    am: people(Array.isArray(f["AM"]) ? f["AM"] : (f["AM"] && f["AM"].value) || (f["AM"] && f["AM"].users) || []),
+    request: num(f["Invoice Request"]) === null ? "" : String(Math.round(f["Invoice Request"])),
+    invoiceNo: clean(f["Invoice Number"]),
+    siNo: clean(f["SI Number"]),
+    invoiceDate: num(f["Invoice Date"]),
+    files: (Array.isArray(f["Invoice"]) ? f["Invoice"] : []).filter(a => a && a.file_token)
+      .map(a => ({ file_token: a.file_token, name: a.name || "file", size: a.size || 0 })),
+  };
+}
+
+/* Invoice numbers sort by their number part ("INV-1670" after "INV-0177"); rows
+   without one go last. */
+const invNo = (s) => { const m = String(s || "").match(/\d+/g); return m ? Number(m[m.length - 1]) : null; };
+export function compareInvoiceNo(a, b, dir = 1) {
+  const x = invNo(a), y = invNo(b);
+  if (x === null || y === null) return (x === null) - (y === null);
+  return dir * (x - y) || dir * String(a).localeCompare(String(b));
+}
+
+/* Collections grouped by Status (in the column's option order), each group sorted
+   by Invoice Number. `query` narrows by AR name, code, request, invoice or AM. */
+export function collectionsView(records, { statusOrder = [], sort = "desc", query = "" } = {}) {
+  const q = query.trim().toLowerCase();
+  const rows = records.map(collectionRow).filter(r => !q ||
+    [r.arName, r.code, r.request, r.invoiceNo, r.siNo, r.remarks, ...r.am.map(u => u.name)].join(" ").toLowerCase().includes(q));
+  const byStatus = new Map();
+  for (const r of rows) {
+    if (!byStatus.has(r.status)) byStatus.set(r.status, []);
+    byStatus.get(r.status).push(r);
+  }
+  const order = [...statusOrder, ...[...byStatus.keys()].filter(s => s && !statusOrder.includes(s)), ""];
+  const dir = sort === "asc" ? 1 : -1;
+  const groups = order.filter(s => byStatus.has(s)).map(status => ({
+    status, rows: byStatus.get(status).sort((a, b) => compareInvoiceNo(a.invoiceNo, b.invoiceNo, dir) || a.arName.localeCompare(b.arName)),
+  }));
+  return { groups, count: rows.length };
+}
+
+/* Only the invoice details that changed, in Lark's write format. `files` are the
+   attachments to keep plus newly uploaded ones ({file_token}). */
+export function invoiceDetailsPatch(row, edit) {
+  const out = {};
+  const text = (k, before, after) => { if ((after || "").trim() !== (before || "")) out[k] = (after || "").trim() || null; };
+  text("Invoice Number", row.invoiceNo, edit.invoiceNo);
+  text("SI Number", row.siNo, edit.siNo);
+  if ((edit.invoiceDate || null) !== (row.invoiceDate || null)) out["Invoice Date"] = edit.invoiceDate || null;
+  const keep = (edit.files || []).map(f => f.file_token);
+  if (keep.join(",") !== row.files.map(f => f.file_token).join(",")) out["Invoice"] = keep.map(t => ({ file_token: t }));
+  return out;
 }

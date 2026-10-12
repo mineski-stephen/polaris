@@ -78,8 +78,9 @@ this project's brief first.* with a link to that brief. The project is found
 through the PAR's `Associated Project Brief` (more reliable than its hand-typed
 code); any disagreement is shown as a note.
 
-**Invoices:** by Account Managers, not ignored, not void, and no Collections row
-carries its request number. A project can have many invoices. If an older
+**Invoices:** by Account Managers, **Approved**, not ignored, and no Collections row
+carries its request number. Requests still under review show up once approved
+(they're counted under the list as *not approved yet*). A project can have many invoices. If an older
 Collections row (from before request numbers were recorded) has the same amount,
 the card says it's likely already recorded.
 
@@ -143,8 +144,7 @@ The request number goes into the project row's `PAR`, after any PAR already ther
 ### Invoice Request → new Collections row
 
 AR Name (editable), Project Code, Invoice Amount, Currency, Invoice Request (the
-request number), Status (`For Invoicing` if approved, else `Pending Invoice
-Request Approval`) and Business Unit when Collections has a matching option.
+request number), Status (`For Invoicing`) and Business Unit when Collections has a matching option.
 Select values are only ever written with an option that already exists.
 
 All rules are in [`js/config.js`](js/config.js) and [`js/sync.js`](js/sync.js).
@@ -163,6 +163,25 @@ After a push, Polaris re-reads the Universe from Lark (not just its own copy), s
 the row you see is the row that's really there.
 
 ---
+
+## The Collections view
+
+On the **Invoices** tab, the right-hand pane shows **Collections** instead of the
+Universe (on a phone, the last tab becomes *Collections*). Columns: AR Name,
+Project Code, Invoice Amount, Currency, Sales Remarks, Status, AM; grouped by
+**Status** (in the column's own order) and sorted by **Invoice Number** (newest
+first; click *Invoice No.* to flip). The invoice number, SI number, date and file
+count show under each AR name. After you add an invoice, the new row glows.
+
+**Invoice details.** Invoice Number, SI Number, Invoice Date and the Invoice file
+are filled in by hand. If the invoice is already issued, add them when you **Push**
+(*Add invoice details* in the sheet; files upload before the row is created, so a
+failed upload writes nothing). Otherwise add them later with the **+** (or the
+pencil, to edit) on the Collections row: the sheet saves only what you changed, uploads files
+first (PDF or image, up to 10 MB each, the most the connection service takes),
+then reads the row back to confirm. Clearing a field empties it in Lark.
+
+**Request numbers** on PAR and invoice cards copy to the clipboard when clicked.
 
 ## Safety checks
 

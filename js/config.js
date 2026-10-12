@@ -32,6 +32,9 @@ export const RULES = {
   newProjectStatus: "For CE/Pitch Creation",
   newProjectMancomPhase: "1. Client Brief Kickoff",
 
+  // Invoice requests only become cards once they have one of these statuses.
+  invoiceStatuses: ["Approved"],
+
   // Approval outcomes that mean the request is dead. These never become cards.
   voidStatuses: ["Rejected", "Recalled", "Canceled", "Deleted", "Terminated"],
 

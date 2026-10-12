@@ -96,6 +96,30 @@ export async function lark(method, url, { token, body, read = false } = {}) {
   }
 }
 
+/* Upload a file as an attachment for a Base (Lark's drive "upload_all", through the
+   proxy as multipart). Resolves with the file_token to put in an attachment field.
+   The proxy accepts up to 10 MB. */
+export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+export async function uploadToBase(file, appToken, token) {
+  if (file.size > MAX_UPLOAD_BYTES) {
+    throw new LarkError("too large", { json: { code: -1, msg: `${file.name} is over 10 MB, the most the connection service takes. Compress it first.` } });
+  }
+  const fd = new FormData();
+  fd.append("file_name", file.name);
+  fd.append("parent_type", "bitable_file");
+  fd.append("parent_node", appToken);
+  fd.append("size", String(file.size));
+  fd.append("file", file, file.name);
+  const res = await send(viaProxy("https://open.larksuite.com/open-apis/drive/v1/medias/upload_all"),
+                         { method: "POST", headers: { Authorization: "Bearer " + token }, body: fd });
+  let json = null;
+  try { json = JSON.parse(await res.text()); } catch (e) {}
+  if (!json || Number(json.code) !== 0 || !json.data || !json.data.file_token) {
+    throw new LarkError("upload failed", json ? { status: res.status, json } : { status: res.status, raw: "" });
+  }
+  return json.data.file_token;
+}
+
 /* Wake the proxy (free Render instances sleep). Resolves true once it answers,
    false if it stays unreachable for about three minutes. Pings "/" because
    blockers list paths like /health on onrender.com. */

@@ -8,7 +8,7 @@ import {
   plain, normCode, allCodes, dayStart, vatExAmount, defaultVat, parAfterAdding, matchOption,
   indexUniverse, indexCollections, briefCards, parCards, invoiceCards,
   universeFromBrief, collectionsFromInvoice, verifyWritten, similarity, vatMentions,
-  peoplePool, universeView, shortName, andonFromBrief,
+  peoplePool, universeView, shortName, andonFromBrief, collectionsView, collectionRow, invoiceDetailsPatch,
 } from "../js/sync.js";
 import { writableOnly } from "../js/ops.js";
 
@@ -154,7 +154,8 @@ test("invoice cards: one project, many invoices; legacy look-alikes flagged", ()
     ir("recI1", "202609010001", { "Project Code": seg("2026TEG-P0240") }),                 // already in Collections
     ir("recI2", "202610010001", { "Project Code": seg("2026TEG-P0240"), "Amount": 200 }),  // 2nd invoice, same project
     ir("recI3", "202602090061", { "Project Code": seg("2026TEG-P0036"), "Amount": 70000 }),// legacy look-alike
-    ir("recI4", "202610010002", { "Project Code": seg("CE-2026TEG-P0098"), "Status": "Under Review" }),
+    ir("recI4", "202610010002", { "Project Code": seg("CE-2026TEG-P0098") }),
+    ir("recI8", "202610010006", { "Project Code": seg("2026TEG-P0240"), "Status": "Under Review" }),   // not approved yet
     ir("recI5", "202610010003", { "Project Code": seg("2026TEG-P0240"), "Status": "Recalled" }),
     ir("recI6", "202610010004", { "Project Code": seg("2023TEG-P0001") }),                 // project not in Universe
     ir("recI7", "202610010005", { "Project Code": seg("2026TEG-P0240"), "Initiator department": seg("Sales") }),
@@ -167,7 +168,7 @@ test("invoice cards: one project, many invoices; legacy look-alikes flagged", ()
   assert.equal(by.recI4.code, "2026TEG-P0098");
   assert.match(by.recI4.notes[0], /1 older row .*“RaizeSquad Full Payment” PHP 18,303.57.*Check/);
   assert.deepEqual(by.recI2.notes, []);
-  assert.deepEqual(hidden, { otherDept: 1, ignored: 0, done: 1, void: 1, noProject: 1 });
+  assert.deepEqual(hidden, { otherDept: 1, ignored: 0, done: 1, void: 1, noProject: 1, notApproved: 1 });
 
   const opts = { "Currency": ["PHP", "USD"], "Business Unit": ["PDEI-Event Service", "GG-Event Service"] };
   const approved = collectionsFromInvoice({ ...by.recI2, businessUnit: "PDEI - Event Service" }, { arName: "" }, opts, RULES);
@@ -176,7 +177,7 @@ test("invoice cards: one project, many invoices; legacy look-alikes flagged", ()
     "Invoice Amount": 200, "Invoice Request": 202610010001, "Status": "For Invoicing",
     "Currency": "PHP", "Business Unit": "PDEI-Event Service",
   });
-  const pendingRow = collectionsFromInvoice(by.recI4, { arName: "Custom AR" }, opts, RULES);
+  const pendingRow = collectionsFromInvoice({ ...by.recI4, status: "Under Review" }, { arName: "Custom AR" }, opts, RULES);
   assert.equal(pendingRow["Status"], "Pending Invoice Request Approval");
   assert.equal(pendingRow["AR Name"], "Custom AR");
   assert.equal("Business Unit" in pendingRow, false);          // unknown BU is left out, never invented
@@ -348,4 +349,34 @@ test("ANDON: briefs from every department, the shared IGNORE box, typed columns 
     { field_name: "Event Start", type: 5 }, { field_name: "Main Project", type: 18 },
   ];
   assert.deepEqual(Object.keys(writableOnly(out, live)).sort(), ["AM", "Event Start", "Project", "Project Code"]);
+});
+
+test("Collections view: grouped by status in option order, newest invoice number first", () => {
+  const row = (id, f) => rec(id, { "AR Name": seg(`AR ${id}`), "Project Code": seg("2026TEG-P0001"), ...f });
+  const recs = [
+    row("a", { "Status": "Collected", "Invoice Number": seg("INV-1520") }),
+    row("b", { "Status": "Collected", "Invoice Number": seg("INV-0177") }),
+    row("c", { "Status": "Collected", "Invoice Number": seg("INV-1670") }),
+    row("d", { "Status": "Collected" }),                                   // not invoiced yet: last
+    row("e", { "Status": "For Invoicing", "Invoice Request": 202610080005, "AM": { type: 11, value: [user("ou_am", "Am Person")] } }),
+  ];
+  const order = ["Invalid", "Collected", "For Collection", "For Invoicing"];
+  const v = collectionsView(recs, { statusOrder: order });
+  assert.deepEqual(v.groups.map(g => g.status), ["Collected", "For Invoicing"]);
+  assert.deepEqual(v.groups[0].rows.map(r => r.id), ["c", "a", "b", "d"]);
+  assert.deepEqual(collectionsView(recs, { statusOrder: order, sort: "asc" }).groups[0].rows.map(r => r.id), ["b", "a", "c", "d"]);
+  assert.equal(v.groups[1].rows[0].request, "202610080005");
+  assert.equal(v.groups[1].rows[0].am[0].name, "Am Person");
+  assert.deepEqual(collectionsView(recs, { statusOrder: order, query: "1670" }).count, 1);
+});
+
+test("invoice details: only what changed is written; clearing sends null", () => {
+  const row = collectionRow(rec("x", { "Invoice Number": seg("INV-1"), "SI Number": seg("600"),
+    "Invoice": [{ file_token: "t1", name: "a.pdf", size: 3 }] }));
+  assert.deepEqual(invoiceDetailsPatch(row, { invoiceNo: "INV-1", siNo: "600", files: row.files }), {});
+  assert.deepEqual(invoiceDetailsPatch(row, { invoiceNo: " INV-2 ", siNo: "", invoiceDate: 1791302400000,
+    files: [...row.files, { file_token: "t2", name: "b.pdf" }] }), {
+    "Invoice Number": "INV-2", "SI Number": null, "Invoice Date": 1791302400000,
+    "Invoice": [{ file_token: "t1" }, { file_token: "t2" }],
+  });
 });

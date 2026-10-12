@@ -70,6 +70,10 @@
     var t = target.match(/\/tables\/(tbl[A-Za-z0-9]+)\/(fields|records)(\/[a-z_]+)?/);
     if (!t) return reply({ code: 99999, msg: "preview mode: no answer for " + target });
     var key = keyOf(f, t[1]);
+    if (!key) {   // a table the snapshot doesn't have (e.g. ANDON, which the Node tools can't open): empty
+      key = "missing:" + t[1];
+      f.tables[key] = t[1]; f.fields[key] = []; f.records[key] = [];
+    }
     var recs = f.records[key];
     if (t[2] === "fields") return reply({ code: 0, data: { items: f.fields[key], has_more: false } });
     var op = t[3] || "";

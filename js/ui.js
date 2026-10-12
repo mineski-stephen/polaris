@@ -94,6 +94,30 @@ export function toast(message, { type = "info", detail, action, onAction, link, 
   return close;
 }
 
+/* Put text on the clipboard; works on http://127.0.0.1 and https pages, with an
+   older fallback for in-app browsers. */
+export async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch (e) {}
+  const ta = h("textarea", { style: "position:fixed;opacity:0;top:0" });
+  ta.value = text;
+  document.body.append(ta);
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch (e) {}
+  ta.remove();
+  return ok;
+}
+
+/* A request number you can click to copy. */
+export function copyable(text) {
+  if (!text) return h("b", null, "?");
+  return h("button", { type: "button", class: "copy", title: "Copy request number", onclick: async (e) => {
+    e.stopPropagation();
+    const ok = await copyText(text);
+    toast(ok ? `Copied ${text}.` : `Couldn't copy. Select ${text} and copy it by hand.`, { type: ok ? "success" : "error", timeout: ok ? 2200 : 0 });
+  } }, text);
+}
+
 /* A short-lived highlight on something that just arrived ("is-new" fades out in CSS). */
 export function flash(el) {
   if (!el) return;

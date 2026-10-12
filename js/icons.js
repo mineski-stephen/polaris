@@ -17,6 +17,7 @@ export const ICONS = {
   logout: svg('<path d="M14.5 4H18a2.5 2.5 0 0 1 2.5 2.5v11A2.5 2.5 0 0 1 18 20h-3.5"/><path d="M10 16.5 5.5 12 10 7.5M5.5 12h10"/>'),
   monitor: svg('<rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8.5 21h7M12 17v4"/>'),
   moon: svg('<path d="M20.5 14.5A8.5 8.5 0 1 1 9.5 3.5a7 7 0 0 0 11 11z"/>'),
+  pencil: svg('<path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4.5 1.5L5 15z"/>'),
   planet: svg('<circle cx="12" cy="12" r="5.5"/><path d="M6.8 13.9c-3 1.9-4.5 3.7-3.9 4.6.9 1.5 6.2-.6 11.8-4.7S22.9 6.4 22 4.9c-.6-.9-2.8-.6-5.6.7"/>'),
   plus: svg('<path d="M12 5v14M5 12h14"/>'),
   refresh: svg('<path d="M20.5 12a8.5 8.5 0 0 1-14.9 5.6M3.5 12A8.5 8.5 0 0 1 18.4 6.4"/><path d="M18.5 2.5v4h-4M5.5 21.5v-4h4"/>'),

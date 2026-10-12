@@ -7,8 +7,8 @@ import {
   universeFromBrief, collectionsFromInvoice, parAfterAdding, defaultVat, amountFormula, vatMentions,
   vatExAmount, people, andonFromBrief,
 } from "./sync.js";
-import { $, h, ic, toast, fmt, flash, reduceMotion } from "./ui.js";
-import { describe, isDeadToken, conn } from "./net.js";
+import { $, h, ic, toast, fmt, flash, reduceMotion, copyable } from "./ui.js";
+import { describe, isDeadToken, conn, uploadToBase } from "./net.js";
 
 const NOUN = { brief: "briefs", par: "PARs", invoice: "invoices", andon: "briefs for ANDON" };
 const STAGE_ORDER = ["universe", "brief", "par", "invoice", "collections", "andon"];
@@ -114,6 +114,7 @@ export function createInbox(ctx) {
       done: { invoice: "already in Collections", andon: "already in ANDON" }[S.tab] || "already in the Universe",
       ignored: "ignored", void: "rejected, recalled or cancelled",
       otherDept: "from other departments", noProject: "for projects not in the Universe",
+      notApproved: "not approved yet",
     };
     const parts = Object.keys(label).filter(k => hd[k] > 0).map(k => `${hd[k].toLocaleString()} ${label[k]}`);
     return parts.length ? `Not shown: ${parts.join(" · ")}.` : "";
@@ -134,13 +135,13 @@ export function createInbox(ctx) {
       }
     } else if (c.kind === "par") {
       const t = c.target;
-      meta = ["PAR ", h("b", null, c.requestNo || "?"),
+      meta = ["PAR ", copyable(c.requestNo),
               t ? ` · goes to "${t.project || t.codeText}"` : "",
               t && t.par ? ` (already has ${t.par})` : ""];
       c.notes.forEach(n => notes.push(h("li", null, `Note: ${n}`)));
     } else {
       meta = [c.amount !== null ? h("b", null, fmt.money(c.amount, c.currency)) : "No amount",
-              ` · request ${c.requestNo || "?"}`,
+              " · request ", copyable(c.requestNo),
               c.existingCount ? ` · ${c.existingCount} in Collections for this project` : ""];
       c.notes.forEach(n => notes.push(h("li", null, `Note: ${n}`)));
     }
@@ -224,7 +225,7 @@ export function createInbox(ctx) {
 
   function defaults(c) {
     if (c.kind === "brief") return { vat: defaultVat(c.currency), client: "", bd: [], otherLinks: "", showLinks: false };
-    if (c.kind === "invoice") return { arName: c.name };
+    if (c.kind === "invoice") return { arName: c.name, invoiceNo: "", siNo: "", invoiceDate: "", files: [], showDetails: false };
     if (c.kind === "andon") return { pm: [], tribe: "" };
     return {};
   }
@@ -410,10 +411,63 @@ export function createInbox(ctx) {
     const ar = h("input", { type: "text", id: "sheetAr", autocomplete: "off" });
     ar.value = ch.arName;
     ar.addEventListener("input", () => { ch.arName = ar.value; refresh(); });
+
+    // Invoice details, if finance has already issued the invoice (optional; they can
+    // also be added later from the Collections pane).
+    const details = h("div", { class: "field" });
+    const showDetails = () => {
+      const text = (id, key, label, placeholder) => {
+        const el = h("input", { type: "text", id, autocomplete: "off", placeholder });
+        el.value = ch[key];
+        el.addEventListener("input", () => { ch[key] = el.value; });
+        return fieldEl(label, true, el, id);
+      };
+      const date = h("input", { type: "date", id: "sheetInvDate" });
+      date.value = ch.invoiceDate;
+      date.addEventListener("input", () => { ch.invoiceDate = date.value; });
+      const list = h("ul", { class: "files" });
+      const paint = () => list.replaceChildren(...ch.files.map((f, i) => h("li", null, ic("link"),
+        h("span", null, f.name, ` (${Math.max(1, Math.round(f.size / 1024)).toLocaleString()} KB)`),
+        h("button", { type: "button", "aria-label": `Remove ${f.name}`, onclick: () => { ch.files.splice(i, 1); paint(); } }, ic("x")))));
+      const input = h("input", { type: "file", multiple: true, hidden: true });
+      input.addEventListener("change", () => { for (const file of input.files) ch.files.push({ name: file.name, size: file.size, file }); input.value = ""; paint(); });
+      paint();
+      details.replaceChildren(
+        h("p", { class: "subhead" }, "Invoice details"),
+        text("sheetInvNo", "invoiceNo", "Invoice Number", "e.g. INV-1680"),
+        text("sheetSiNo", "siNo", "SI Number", "e.g. 610"),
+        fieldEl("Invoice Date", true, date, "sheetInvDate"),
+        h("div", { class: "field" }, h("span", { class: "label" }, "Invoice", h("em", null, " (optional)")), list,
+          h("label", { class: "btn btn-sm file-btn" }, ic("plus"), "Add a file", input),
+          h("p", { class: "set-sub" }, "PDF or image, up to 10 MB each. Uploaded when you push.")));
+      details.style.gap = "12px";
+    };
+    if (ch.showDetails || ch.invoiceNo || ch.files.length) showDetails();
+    else details.replaceChildren(h("button", { type: "button", class: "linkish", onclick: () => {
+      ch.showDetails = true; showDetails(); $("#sheetInvNo").focus(); } }, ic("plus"), "Add invoice details (number, SI, date, file)"));
+
     put(body, fieldEl("AR Name", false, ar, "sheetAr"),
                 c.notes.length ? h("p", { class: "note" }, `Note: ${c.notes.join(" ")}`) : null,
+                details,
                 h("p", { class: "subhead" }, "Also written"), written);
     refresh();
+  }
+
+  /* Invoice details from the sheet, in Lark's write format (files uploaded first;
+     tokens are kept on the sheet so a retry doesn't upload them twice). */
+  async function invoiceDetails(ch) {
+    const out = {};
+    if (ch.invoiceNo.trim()) out["Invoice Number"] = ch.invoiceNo.trim();
+    if (ch.siNo.trim()) out["SI Number"] = ch.siNo.trim();
+    if (ch.invoiceDate) out["Invoice Date"] = Date.parse(ch.invoiceDate + "T00:00:00Z") - 8 * 3600000;   // midnight Manila
+    const todo = ch.files.filter(f => !f.file_token);
+    for (let i = 0; i < todo.length; i++) {
+      go.querySelector(".btn-label").textContent = todo.length > 1 ? `Uploading ${i + 1} of ${todo.length}…` : "Uploading…";
+      todo[i].file_token = await uploadToBase(todo[i].file, ctx.tables.collections.app, ctx.token());
+    }
+    if (ch.files.length) out["Invoice"] = ch.files.map(f => ({ file_token: f.file_token }));
+    go.querySelector(".btn-label").textContent = "Pushing…";
+    return out;
   }
 
   async function runPush() {
@@ -436,7 +490,7 @@ export function createInbox(ctx) {
       } else if (c.kind === "par") {
         res = await pushPar(ctx.call, ctx.tables, RULES, c, s.targetId);
       } else {
-        payload = collectionsFromInvoice(c, s.choices, ctx.collectionOptions(), RULES);
+        payload = { ...collectionsFromInvoice(c, s.choices, ctx.collectionOptions(), RULES), ...await invoiceDetails(s.choices) };
         res = await pushInvoice(ctx.call, ctx.tables, RULES, c, payload, s.clientToken);
       }
       s.done = true;

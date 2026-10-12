@@ -65,10 +65,13 @@ export function schemaSpec(rules) {
       },
     },
     collections: {
-      read: ["Project Code", "Invoice Request", "AR Name", "Invoice Amount", "Currency"],
+      read: ["Project Code", "Invoice Request", "AR Name", "Invoice Amount", "Currency", "Sales Remarks", "Status",
+             "AM", "Invoice Number", "SI Number", "Invoice", "Invoice Date"],
+      index: ["Project Code", "Invoice Request", "AR Name", "Invoice Amount", "Currency"],
       fields: {
         "AR Name": T.text, "Project Code": T.text, "Invoice Amount": T.number,
         "Currency": T.select, "Status": T.select, "Business Unit": T.select, "Invoice Request": T.number,
+        "Sales Remarks": T.text, "Invoice Number": T.text, "SI Number": T.text, "Invoice": 17, "Invoice Date": T.date,
       },
       options: {
         "Status": [...new Set([...Object.values(rules.collectionStatus), rules.collectionStatusPending])],
@@ -299,13 +302,25 @@ export async function pushAndon(call, tables, rules, card, fields, clientToken) 
 
 /* Invoice request → new Collections row, unless one already carries its request number. */
 export async function pushInvoice(call, tables, rules, card, fields, clientToken) {
-  const coll = indexCollections(await loadRecords(call, tables.collections, schemaSpec(rules).collections.read));
+  const coll = indexCollections(await loadRecords(call, tables.collections, schemaSpec(rules).collections.index));
   if (coll.irNos.has(card.requestNo)) {
     throw new AlreadyDone(`Invoice request ${card.requestNo} is already in Collections.`);
   }
   const rec = await createRecord(call, tables.collections, fields, clientToken);
   return { recordId: rec.record_id, written: fields,
            ...await readBack(call, tables.collections, rec.record_id, fields) };
+}
+
+/* The Collections table again, fresh from Lark. */
+export async function loadCollections(call, tables, rules) {
+  return loadRecords(call, tables.collections, schemaSpec(rules).collections.read);
+}
+
+/* Invoice details typed in by finance (Invoice Number, SI Number, Invoice Date, the
+   invoice file): writes only what changed, then reads it back. */
+export async function saveInvoiceDetails(call, tables, recordId, patch) {
+  await updateRecord(call, tables.collections, recordId, patch);
+  return { recordId, written: patch, ...await readBack(call, tables.collections, recordId, patch) };
 }
 
 /* Tick (or untick) a source row's IGNORE box, then confirm it stuck. */
