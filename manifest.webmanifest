@@ -1,0 +1,15 @@
+{
+  "name": "Polaris",
+  "short_name": "Polaris",
+  "description": "Push new Project Briefs, PARs and invoices into the Universe.",
+  "start_url": "./#/briefs",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#F5F6FA",
+  "theme_color": "#4B3FE0",
+  "icons": [
+    { "src": "img/polaris-icon-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "img/polaris-icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "img/polaris-icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

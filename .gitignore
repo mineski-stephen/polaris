@@ -1,0 +1,4 @@
+# Preview snapshot: real business data, never publish
+tests/.preview-fixture.json
+# Logo working files and local tooling
+__pycache__/

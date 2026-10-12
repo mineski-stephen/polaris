@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <!-- Never cache the page itself. -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Polaris · Mineski</title>
+  <meta name="description" content="Polaris moves new Project Briefs, PARs and invoices into the Universe.">
+  <meta name="theme-color" content="#F5F6FA" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0C0E1F" media="(prefers-color-scheme: dark)">
+  <link rel="icon" type="image/svg+xml" href="img/polaris-icon.svg">
+  <link rel="icon" type="image/png" sizes="32x32" href="img/polaris-icon-32.png">
+  <link rel="apple-touch-icon" href="img/polaris-icon-180.png">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap">
+  <!-- Apply the saved theme (Settings > Appearance) before anything paints. -->
+  <script>try { var t = localStorage.getItem("polaris.theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}</script>
+  <!-- Every load fetches the stylesheet and every script module under a fresh URL,
+       so a stale cached copy is never used. The import map gives each module's
+       imports the same fresh URL. -->
+  <script>
+    (function () {
+      var v = window.POLARIS_BUILD = Date.now().toString(36);
+      var files = ["js/config.js", "js/sync.js", "js/ops.js", "js/icons.js", "js/ui.js", "js/net.js",
+                   "js/auth.js", "js/inbox.js", "js/universe.js", "js/app.js"];
+      var map = { imports: {} };
+      files.forEach(function (f) { map.imports[new URL(f, location.href).href] = new URL(f + "?v=" + v, location.href).href; });
+      document.write('<link rel="stylesheet" href="css/app.css?v=' + v + '">');
+      document.write('<script type="importmap">' + JSON.stringify(map) + '<\/script>');
+      // Developers only: ?preview on localhost runs on a snapshot, with Lark simulated (tests/preview-shim.js).
+      if (/^(localhost|127\.0\.0\.1)$/.test(location.hostname) && /[?&]preview(&|=|$)/.test(location.search)) {
+        document.write('<script src="tests/preview-shim.js?v=' + v + '"><\/script>');
+      }
+    })();
+  </script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <div class="bg" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <a class="brand" href="#/" aria-label="Polaris home">
+      <img class="brand-mark" src="img/polaris-icon.svg" alt="" width="34" height="34">
+      <span class="brand-name">Polaris</span>
+      <span class="env" id="envBadge" hidden></span>
+    </a>
+    <div class="top-right">
+      <a class="override-badge" id="overrideBadge" href="#/settings" hidden>Proxy override</a>
+      <a class="session-pill" id="sessionPill" href="#/settings" hidden>
+        <span class="i" data-icon="clock" aria-hidden="true"></span><span id="sessionLeft"></span>
+      </a>
+      <a class="me" id="meLink" href="#/settings" hidden aria-label="Your account">
+        <img class="avatar" id="avatar" alt="" referrerpolicy="no-referrer" hidden>
+        <span class="avatar avatar-initials" id="initials" aria-hidden="true"></span>
+      </a>
+      <a class="icon-btn" id="settingsLink" href="#/settings" aria-label="Settings" title="Settings">
+        <span class="i" data-icon="gear" aria-hidden="true"></span>
+      </a>
+    </div>
+  </header>
+
+  <main id="main" tabindex="-1">
+    <div class="block-note" id="blockNote" role="alert" hidden>
+      <span class="i" data-icon="alert" aria-hidden="true"></span>
+      <div>
+        <p><b>Polaris can't reach its connection service.</b> An ad blocker or privacy extension is probably blocking it.</p>
+        <p>Allow <code id="blockHost">lark-proxy-dwiw.onrender.com</code> in your blocker (or pause it on this page), then reload.</p>
+      </div>
+      <button type="button" class="btn btn-sm" id="reloadBtn">Reload</button>
+    </div>
+
+    <!-- Logged out ------------------------------------------------------------>
+    <section class="view view-login" data-view="login" hidden>
+      <div class="login-card">
+        <img class="login-mark" src="img/polaris-icon.svg" alt="" width="88" height="88">
+        <h1>Polaris</h1>
+        <p class="lede">Push new briefs, PARs and invoices into the Universe.</p>
+        <button type="button" class="btn btn-primary btn-lg" id="loginBtn">Log in with Lark</button>
+        <p class="hint">You'll stay logged in for about 2 hours.</p>
+        <div class="callout callout-warn" id="loginMsg" role="status" hidden></div>
+        <div class="callout callout-err" id="redirectMsg" hidden></div>
+      </div>
+    </section>
+
+    <!-- Finishing a login -------------------------------------------------------->
+    <section class="view view-busy" data-view="busy" hidden>
+      <span class="spinner" aria-hidden="true"></span>
+      <p>Logging you in…</p>
+    </section>
+
+    <!-- Inbox + Universe ------------------------------------------------------->
+    <section class="view workspace" data-view="work" id="workspace" hidden>
+      <nav class="tabs" role="tablist" aria-label="Views">
+        <a class="tab" role="tab" href="#/briefs" data-tab="brief">Briefs <span class="count" data-count="brief"></span></a>
+        <a class="tab" role="tab" href="#/pars" data-tab="par">PARs <span class="count" data-count="par"></span></a>
+        <a class="tab" role="tab" href="#/invoices" data-tab="invoice">Invoices <span class="count" data-count="invoice"></span></a>
+        <a class="tab" role="tab" href="#/andon" data-tab="andon">ANDON <span class="count" data-count="andon"></span></a>
+        <a class="tab tab-universe" role="tab" href="#/universe" data-tab="universe">Universe</a>
+      </nav>
+
+      <section class="pane pane-inbox" aria-label="Inbox">
+        <div class="pane-tools">
+          <label class="search">
+            <span class="i" data-icon="search" aria-hidden="true"></span>
+            <span class="sr-only">Search</span>
+            <input type="search" id="inboxSearch" autocomplete="off" spellcheck="false">
+          </label>
+          <button type="button" class="icon-btn" id="refreshBtn" aria-label="Refresh" title="Refresh">
+            <span class="i" data-icon="refresh" aria-hidden="true"></span>
+          </button>
+        </div>
+        <p class="updated" id="updated"></p>
+        <div class="callout" id="loadMsg" role="alert" hidden></div>
+        <div class="loader" id="loader" hidden></div>
+        <div class="cards" id="cards"></div>
+        <p class="empty" id="emptyNote" hidden></p>
+        <p class="hidden-note" id="hiddenNote"></p>
+      </section>
+
+      <section class="pane pane-universe" aria-labelledby="uniTitle">
+        <header class="uni-head">
+          <div class="uni-title">
+            <h2 id="uniTitle">Universe</h2>
+            <p class="uni-sub" id="uniSub"></p>
+          </div>
+          <div class="uni-tools">
+            <label class="search search-sm">
+              <span class="i" data-icon="search" aria-hidden="true"></span>
+              <span class="sr-only">Search the Universe</span>
+              <input type="search" id="uniSearch" placeholder="Search" autocomplete="off" spellcheck="false">
+            </label>
+            <label class="select">
+              <span class="sr-only">Year</span>
+              <select id="uniYear"></select>
+            </label>
+            <a class="icon-btn" id="uniOpen" target="_blank" rel="noopener" aria-label="Open the Universe in Lark" title="Open in Lark">
+              <span class="i" data-icon="external" aria-hidden="true"></span>
+            </a>
+          </div>
+        </header>
+        <div class="uni-wrap" id="uniWrap">
+          <table class="uni" id="uniTable"></table>
+          <div class="loader" id="uniLoader" hidden></div>
+          <p class="empty" id="uniEmpty" hidden></p>
+        </div>
+        <p class="uni-foot" id="uniFoot"></p>
+      </section>
+    </section>
+
+    <!-- Settings ------------------------------------------------------------------>
+    <section class="view view-settings" data-view="settings" hidden>
+      <div class="settings-head">
+        <a class="back" href="#/" id="settingsBack"><span class="i" data-icon="arrowLeft" aria-hidden="true"></span> Back</a>
+        <h1>Settings</h1>
+      </div>
+      <div class="settings">
+        <section class="card set-card" aria-labelledby="accTitle">
+          <h2 id="accTitle">Account</h2>
+          <div class="account" id="account"></div>
+        </section>
+
+        <section class="card set-card" aria-labelledby="themeTitle">
+          <h2 id="themeTitle">Appearance</h2>
+          <div class="seg" id="themeSeg" role="radiogroup" aria-labelledby="themeTitle">
+            <button type="button" role="radio" data-theme-choice="system"><span class="i" data-icon="monitor" aria-hidden="true"></span> System</button>
+            <button type="button" role="radio" data-theme-choice="light"><span class="i" data-icon="sun" aria-hidden="true"></span> Light</button>
+            <button type="button" role="radio" data-theme-choice="dark"><span class="i" data-icon="moon" aria-hidden="true"></span> Dark</button>
+          </div>
+        </section>
+
+        <section class="card set-card" aria-labelledby="connTitle">
+          <h2 id="connTitle">Connections</h2>
+          <ul class="status-list" id="connList"></ul>
+          <p class="set-sub" id="envNote"></p>
+        </section>
+
+        <section class="card set-card" id="advancedCard" aria-labelledby="advTitle" hidden>
+          <details class="advanced" id="advanced">
+            <summary id="advTitle">Advanced: connection service address</summary>
+            <p class="set-sub">For testing on this computer only. Leave it empty to use the hosted service.</p>
+            <label class="field">
+              <span>Proxy address</span>
+              <input type="url" id="proxyInput" spellcheck="false" autocomplete="off">
+            </label>
+            <div class="row">
+              <button type="button" class="btn" id="proxySave">Save address</button>
+              <button type="button" class="btn btn-ghost" id="proxyReset">Use the hosted service</button>
+            </div>
+          </details>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <!-- Push confirmation ------------------------------------------------------------>
+  <dialog class="modal" id="sheet" aria-labelledby="sheetTitle">
+    <form class="modal-form" id="sheetForm">
+      <header class="modal-head">
+        <h2 id="sheetTitle"></h2>
+        <p class="modal-sub" id="sheetSub"></p>
+      </header>
+      <div class="modal-body" id="sheetBody"></div>
+      <p class="form-error" id="sheetError" role="alert" hidden></p>
+      <footer class="modal-actions">
+        <button type="button" class="btn btn-ghost" id="sheetCancel">Cancel</button>
+        <button type="button" class="btn btn-primary" id="sheetGo"><span class="btn-label"></span></button>
+      </footer>
+    </form>
+  </dialog>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+
+  <script>document.write('<script type="module" src="js/app.js?v=' + window.POLARIS_BUILD + '"><\/script>');</script>
+</body>
+</html>

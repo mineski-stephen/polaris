@@ -1,0 +1,13 @@
+{
+  "name": "polaris",
+  "private": true,
+  "type": "module",
+  "description": "Polaris: a static page that pushes Project Briefs, PARs and Invoice Requests into the Universe and Collections Lark tables.",
+  "scripts": {
+    "serve": "python -m http.server 9123 --bind 127.0.0.1",
+    "test": "node --test tests/",
+    "check:live": "node tests/check-live.mjs",
+    "check:e2e": "node tests/e2e.mjs",
+    "preview:fixture": "node tests/make-preview-fixture.mjs"
+  }
+}

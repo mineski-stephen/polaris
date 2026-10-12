@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Polaris">
+<title>Polaris</title>
+<defs>
+<clipPath id="planet"><circle cx="548" cy="600" r="222"/></clipPath>
+<clipPath id="front"><rect x="-152" y="600" width="1400" height="700" transform="rotate(-30 548 600)"/></clipPath>
+</defs>
+<rect width="1024" height="1024" rx="184" fill="#E9E6FF"/>
+<!-- ring (its back half is hidden by the planet and a tile-coloured gap) -->
+<ellipse cx="548" cy="600" rx="398" ry="102" transform="rotate(-30 548 600)" fill="none" stroke="#1F1A5C" stroke-width="56"/>
+<circle cx="548" cy="600" r="248" fill="#E9E6FF"/>
+<!-- planet: shaded limb, lit face, two latitude bands -->
+<circle cx="548" cy="600" r="222" fill="#3A2FC4"/>
+<circle cx="516" cy="568" r="222" fill="#4B3FE0" clip-path="url(#planet)"/>
+<g clip-path="url(#planet)"><g transform="rotate(-30 548 600)"><path d="M344.5 514.2A203.5 52.1 0 0 0 751.5 514.2" fill="none" stroke="#7D74F5" stroke-width="30"/><path d="M381.2 458.4A166.8 42.7 0 0 0 714.8 458.4" fill="none" stroke="#7D74F5" stroke-width="18"/></g></g>
+<!-- ring, front half, with a gap where it crosses the planet -->
+<g clip-path="url(#front)"><ellipse cx="548" cy="600" rx="398" ry="102" transform="rotate(-30 548 600)" fill="none" stroke="#E9E6FF" stroke-width="108"/><ellipse cx="548" cy="600" rx="398" ry="102" transform="rotate(-30 548 600)" fill="none" stroke="#1F1A5C" stroke-width="56"/></g>
+<!-- the pole star, where the planet's axis points -->
+<path fill="#FFA41B" d="M 338.0 127.7 L 353.6 220.6 L 406.1 236.3 L 353.6 251.9 L 338.0 304.3 L 322.4 251.9 L 269.9 236.3 L 322.4 220.6 Z"/>
+</svg>
