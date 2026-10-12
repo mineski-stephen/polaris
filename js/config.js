@@ -5,7 +5,7 @@
    type and the select options it writes) and refuses to push if anything is
    missing, so a renamed column fails loudly instead of writing bad data. */
 
-export const ENV_LABEL = "Test copy";   // shown in the header; set to "" for production
+export const ENV_LABEL = "";   // shown in the header; set to "" for production
 
 export const TABLE_LINKS = {
   universe:    "https://mineskiglobal.larksuite.com/base/NP7TbjwHNaTyLOsWafelN9wNgEd?table=tblEmWYOXoAF70uf&view=vewFlJYfpR",
