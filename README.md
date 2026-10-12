@@ -1,19 +1,21 @@
 # Polaris
 
 Polaris keeps the **🌌 Universe** and **💸 Collections** Lark tables in step with
-what gets filed. New Project Briefs, PARs and Invoice Requests show up as cards;
-**Push** moves one across, **Ignore** hides it for good (with Undo). It works on a
+what gets filed. Each change the trackers need shows up as a card;
+**Push** makes it with one click, **Ignore** hides it for good (with Undo). It works on a
 phone and on a PC, and every change is made as you, with your own Lark login.
 
 | Source | Becomes |
 | ------ | ------- |
 | **Project Brief** (by Account Managers) | a new **Universe** row |
 | **Project Approval (PAR)** | the request number in the project's Universe **PAR** column |
-| **Invoice Request** (by Account Managers) | a new **Collections** row |
+| **Won project** (in the Universe, with a PAR) | a **For Invoicing** row in **Collections** |
+| **Invoice Request** (by Account Managers) | moves its Collections row along: **Pending Invoice Request Approval** when filed, **For Collection** when approved |
 | **Project Brief** (any department) | a new **ANDON** row (Project Management's board) |
 
-> **Connected to the TEST COPIES.** The header shows a yellow *Test copy* badge.
-> See [Going live](#going-live).
+> **Connected to the live tables.** `ENV_LABEL` in `js/config.js` is empty, so the
+> header shows no *Test copy* badge and every push changes real data. See
+> [Going live](#going-live) for switching between the test copies and production.
 
 ---
 
@@ -39,15 +41,19 @@ phone and on a PC, and every change is made as you, with your own Lark login.
 1. **Log in with Lark.** A login lasts about 2 hours. The clock in the header
    shows how long you have left (it turns yellow in the last 10 minutes), and
    Settings shows the exact time it ends. **Log in again** there to get a fresh 2 hours.
-2. **Briefs / PARs / Invoices** tabs list what isn't in the Universe or Collections
-   yet, newest first. Search narrows the list.
+2. **Briefs / PARs** tabs list what isn't in the Universe yet; **Invoices** lists
+   every change Collections needs (see [Invoices](#invoices-the-collections-lifecycle)).
+   Newest first; search narrows the list.
 3. **Push** opens a sheet that shows exactly what will be written:
    - *Brief:* type the **Client**, pick the **BD** (blank unless you pick someone;
      frequent BDs are listed first), choose **VAT** (the amount updates as you
      switch), and optionally **Add other links** (blank by default).
    - *PAR:* shows the PAR cell before and after. If several Universe rows share
      the code, you choose the row.
-   - *Invoice:* edit the **AR Name** if you like (for example add "Downpayment").
+   - *Invoice:* shows which Collections row changes and how, each cell with what
+     it was before. Pick another row (or a new one) if Polaris guessed wrong; a new
+     row's **AR Name** can be edited (for example add "Downpayment"). For an
+     approved request you can add the invoice details (number, SI, date, file).
 4. **Ignore** hides a card by ticking the source row's IGNORE box. **Undo** in the
    message brings it back.
 5. On a wide screen the **Universe** table sits beside the cards, so you can watch
@@ -78,13 +84,50 @@ this project's brief first.* with a link to that brief. The project is found
 through the PAR's `Associated Project Brief` (more reliable than its hand-typed
 code); any disagreement is shown as a note.
 
-**Invoices:** by Account Managers, **Approved**, not ignored, and no Collections row
-carries its request number. Requests still under review show up once approved
-(they're counted under the list as *not approved yet*). A project can have many invoices. If an older
-Collections row (from before request numbers were recorded) has the same amount,
-the card says it's likely already recorded.
+**Invoices:** see the next section.
 
 Under each list: *Not shown: 233 already in the Universe · 24 ignored · …*
+
+### Invoices: the Collections lifecycle
+
+A Collections row moves through three stages, and the Invoices tab shows each
+move that's due, as one card:
+
+| Card | When | Push |
+| ---- | ---- | ---- |
+| **Won** | A Universe project is won (*Won - Awaiting CE Signature*, *Signed CE* or *For Collection*), has a PAR, and has no Collections row and no invoice request yet | adds a **For Invoicing** row |
+| **Under Review** (request filed) | An invoice request is filed and isn't on any row | puts its number on the project's For Invoicing row and sets **Pending Invoice Request Approval** (or adds a new Pending row if there's none) |
+| **Approved** | The request is approved and its row isn't For Collection yet | sets **For Collection**, updates the amount to the invoiced one if it changed, and takes the invoice details if you add them (a row can skip Pending when the approval is quick) |
+| **Recalled / Rejected** (withdrawn) | A request on a Pending row was withdrawn | clears the number and puts the row back to **For Invoicing** |
+
+So one invoice request comes up twice: when it's filed, and again when it's approved.
+
+- **Which row.** A project can have several For Invoicing rows (tranches). Each
+  request goes to the one in the same currency with the closest amount, one
+  request per row. The card says which row (*"Tranche 2" · For Invoicing → Pending…*)
+  and the sheet lets you pick another, or a new row.
+- **Rows recorded by hand.** Many invoices were added to Collections without
+  their request number. When an approved request has exactly the same amount as
+  one of those rows (as filed, or VAT-ex), the card offers to **add the request
+  number** to that row, and nothing else changes on it (*For Collection · adds
+  the request number*). Ties go to the request approved closest to the row's
+  Invoice Date. If a row is close but not equal, the card asks you to check it.
+- **Requests filed again.** If a recalled request is replaced by a new one, the
+  new request simply takes the row over; no *withdrawn* card is shown for it.
+- **Which project.** The request's typed Project Code, or, when that code isn't in
+  the Universe, the project its PAR (*Associated Project Approval*) is on. If the
+  two disagree, the card says so.
+- **Not shown:** other departments' requests (unless already on a Collections row:
+  those are followed whoever filed them), ignored ones, rejected or recalled ones
+  that aren't on a row, projects not in the Universe, and **closed or lost
+  projects** (*For Closing*, *Fully Closed*, *Lost*, *Stalled*, *Archived*), unless
+  a row of theirs is still waiting in For Invoicing.
+- **Blocked:** a new row for a project with **no PAR** in the Universe (*Add this
+  project's PAR to the Universe first*, with a link to the PAR card if there is
+  one), and a won project with no amount yet.
+- **Ignore** ticks the request's IGNORE box. For a *Won* card it ticks an
+  **IGNORE** checkbox on the project's Universe row, which the Universe doesn't
+  have yet: until someone adds that column, Ignore is greyed out on *Won* cards.
 
 ---
 
@@ -141,11 +184,21 @@ Universe and ANDON lists.
 The request number goes into the project row's `PAR`, after any PAR already there
 (`202607030034, 202610080029`), never replacing it.
 
-### Invoice Request → new Collections row
+### Collections changes
 
-AR Name (editable), Project Code, Invoice Amount, Currency, Invoice Request (the
-request number), Status (`For Invoicing`) and Business Unit when Collections has a matching option.
-Select values are only ever written with an option that already exists.
+| Change | Collections columns written |
+| ------ | --------------------------- |
+| Won → new row | AR Name (the project, editable), Project Code, Invoice Amount = the Universe's **Amount (VAT-Inc.)** in PHP, Currency `PHP`, Status `For Invoicing`, Business Unit (the Universe's, matched to a Collections option) |
+| Filed → its row | Invoice Request (the number) and Status `Pending Invoice Request Approval`; nothing else |
+| Filed → new row | AR Name, Project Code, Invoice Amount and Currency (as filed), Invoice Request, Status `Pending…`, Business Unit |
+| Approved → its row | Status `For Collection`; Invoice Amount and Currency when the request's differ; the request number if the row didn't have it; any invoice details you add |
+| Approved → a row recorded by hand | Invoice Request only (plus any invoice details you add) |
+| Approved → new row | as *Filed → new row*, with Status `For Collection` |
+| Withdrawn → its row | Invoice Request cleared, Status `For Invoicing` |
+
+Only cells that change are written. PAR, Project Name, Client Name and AM are
+lookups in Collections and fill themselves from the Universe through the Project
+Code. Select values are only ever written with an option that already exists.
 
 All rules are in [`js/config.js`](js/config.js) and [`js/sync.js`](js/sync.js).
 
@@ -188,7 +241,9 @@ then reads the row back to confirm. Clearing a field empties it in Lark.
 - **Every column is checked on load** (name, type, and the select options Polaris
   writes). If anything doesn't match, pushing is switched off and the problem is listed.
 - **The destination is re-read just before every push.** If it's already there
-  (someone else pushed it), nothing is written and the list refreshes.
+  (someone else pushed it), nothing is written and the list refreshes. A
+  Collections change also checks its row still says what the card saw (same
+  Status, same request number) and that no other row took the request meanwhile.
 - **Creates are idempotent** (`client_token`), so a retry can't make a second row.
 - **Every write is read back** and compared field by field. The message says
   *All 15 fields checked in Lark*, or lists what didn't match.
@@ -224,7 +279,9 @@ Any static host works (for example GitHub Pages); there's no build step.
 ## Going live
 
 1. In [`js/config.js`](js/config.js), replace the five links in `TABLE_LINKS` with
-   the production tables and set `ENV_LABEL = ""`.
+   the production tables and set `ENV_LABEL = ""` (this is how it's set now). To
+   go back to the test copies, for example to run the end-to-end check, put their
+   links back and set `ENV_LABEL = "Test copy"`.
 2. Run `npm run check:live` (or just open Polaris). Any column that's named or typed
    differently in production is listed, and pushing stays off until it's fixed.
 3. Everyone who uses Polaris needs edit access to those Bases (it writes as them).
@@ -250,9 +307,11 @@ holds real business data: never publish it (it's in `.gitignore`) and delete it 
 not edit them, so this runs as you, in the browser: log in to Polaris, then open
 **http://127.0.0.1:9123/tests/e2e.html** in the same tab and click *Run the check*
 twice. It snapshots every stored field of all five tables, pushes one brief, one
-PAR and one invoice, ignores and restores one brief, re-pushes each (expecting
-*already done*), and requires the before/after difference to be exactly those
-writes. It refuses to run unless `ENV_LABEL` is `"Test copy"`.
+PAR, one Collections change that adds a row and one that moves a row along,
+ignores and restores one brief, re-pushes each (expecting *already done*), and
+requires the before/after difference to be exactly those writes. It refuses to
+run unless `ENV_LABEL` is `"Test copy"`, so it can't run while Polaris points at
+the live tables.
 
 ---
 
@@ -272,6 +331,10 @@ writes. It refuses to run unless `ENV_LABEL` is `"Test copy"`.
 | *Check these in Lark: …* after a push | A value didn't land as sent. Open the row in Lark and correct it. |
 | *Note: looks like "…" already in the Universe* | Probably a re-filed brief. Ignore it if it's the same project. |
 | *Push this project's brief first.* | Use **Go to the brief**, push it, then the PAR or invoice can go. |
+| *Add this project's PAR to the Universe first.* | Use **Go to the PAR** (if it's listed), push it, then the invoice can go. |
+| *"…" changed since the list was loaded.* | Someone updated that Collections row meanwhile. Nothing was written; the list refreshed, so check the card again. |
+| **Ignore** is greyed out on a *Won* card | The Universe has no IGNORE checkbox column yet. Add one (named `IGNORE`) to hide won projects that shouldn't go to Collections. |
+| A card would add a new Collections row you think already exists | Pick that row in the sheet instead (rows recorded by hand show *add the number only*), or ignore the card. |
 
 ---
 
@@ -290,6 +353,7 @@ writes. It refuses to run unless `ENV_LABEL` is `"Test copy"`.
 | `js/app.js` | Routes, header, loading, Settings, and what happens after a push. |
 | `js/inbox.js` | The cards, the push sheet (with the BD picker) and Ignore / Undo. |
 | `js/universe.js` | The Universe table. |
+| `js/collections.js` | The Collections table and its invoice details sheet. |
 | `js/icons.js`, `js/ui.js` | Icons (the same style as Fetch) and small UI helpers. |
 | `tests/` | Offline tests, the live read-only check and the end-to-end check. |
 
@@ -306,7 +370,13 @@ page runs; an import map still gives every module a fresh URL on each visit.
   under *Add other links* if needed.
 - **Client** isn't on the Project Brief, so it's typed in the sheet (or left for later).
 - **Old PARs and invoices.** Nothing in those tables is marked IGNORE yet, so older
-  ones for projects in the Universe show up once. Push or ignore them.
+  ones for projects in the Universe show up once. Push or ignore them. Approved
+  requests whose invoices were typed into Collections by hand with a slightly
+  different amount can't be matched safely; their cards say so, so pick the row
+  in the sheet or ignore the card.
+- **Tranches.** A won project gets one For Invoicing row for its whole amount.
+  Split it into tranche rows by hand if it's billed in parts; requests then find
+  the right tranche by amount.
 - **Lark API formats.** Read-backs use `records/batch_get` (the single-record GET
   returns numbers as text). Text columns only accept plain text; Lark still shows
   URLs in them as clickable links.

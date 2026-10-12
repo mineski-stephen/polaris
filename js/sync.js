@@ -52,12 +52,22 @@ export function shortName(name) {
 }
 
 const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+/* A number from a number column or a formula ({type, value: [n]}). */
+const numOf = (v) => num(v) ?? (v && typeof v === "object" && Array.isArray(v.value) ? num(v.value[0]) : null);
 
 /* An approval's request number is the text of its "Request No." URL field. */
 export const requestNo = (v) => clean(v);
 
 /* Request numbers inside free text, e.g. a Universe PAR cell "202607030034, 202607080041". */
 export const requestNos = (text) => String(text || "").match(/\d{12}/g) || [];
+
+/* A request number starts with its filing date (202606030032 → 3 Jun 2026); as
+   midnight in the given UTC offset, or null. */
+export function requestDate(no, offsetHours) {
+  const m = String(no || "").match(/^(\d{4})(\d{2})(\d{2})\d{4}$/);
+  if (!m) return null;
+  return Date.UTC(+m[1], +m[2] - 1, +m[3]) - offsetHours * 3600000;
+}
 
 /* Project codes look like 2026TEG-P0286. Source tables are typed by hand, so
    codes arrive as "CE_2026TEG-P0091", "Project Code\n2024TEG-P0131" or with a
@@ -107,9 +117,12 @@ export function similarity(a, b) {
 
 /* ======================= indexes over the destination tables ======================= */
 
-/* Universe, keyed by every project code found in each row's Project Code cell. */
-export function indexUniverse(records) {
-  const rows = [], byCode = new Map(), parNos = new Set();
+const push = (map, key, value) => { if (!map.has(key)) map.set(key, []); map.get(key).push(value); };
+
+/* Universe, keyed by every project code found in each row's Project Code cell,
+   and by every PAR request number in its PAR cell. */
+export function indexUniverse(records, { ignoreField = "IGNORE" } = {}) {
+  const rows = [], byCode = new Map(), byPar = new Map();
   for (const r of records) {
     const f = r.fields || {};
     const row = {
@@ -118,37 +131,39 @@ export function indexUniverse(records) {
       project: clean(f["Project"]),
       client: clean(f["Client"]),
       par: clean(f["PAR"]),
+      status: clean(f["Status"]),
+      amountInc: numOf(f["Amount (VAT-Inc.)"]),
+      businessUnit: clean(f["Business Unit"]),
+      ignored: f[ignoreField] === true,
     };
     rows.push(row);
-    for (const c of new Set(allCodes(row.codeText))) {
-      if (!byCode.has(c)) byCode.set(c, []);
-      byCode.get(c).push(row);
-    }
-    for (const n of requestNos(row.par)) parNos.add(n);
+    for (const c of new Set(allCodes(row.codeText))) push(byCode, c, row);
+    for (const n of new Set(requestNos(row.par))) push(byPar, n, row);
   }
-  return { rows, byCode, parNos };
+  return { rows, byCode, byPar, parNos: new Set(byPar.keys()) };
 }
 
 /* Collections, keyed by invoice request number and by project code. */
 export function indexCollections(records) {
-  const irNos = new Set(), byCode = new Map();
+  const rows = [], byIr = new Map(), byCode = new Map();
   for (const r of records) {
     const f = r.fields || {};
     const ir = num(f["Invoice Request"]);
     const row = {
       id: r.record_id,
       ir: ir === null ? "" : String(Math.round(ir)),
+      code: normCode(plain(f["Project Code"])),
       arName: clean(f["AR Name"]),
       amount: num(f["Invoice Amount"]),
       currency: clean(f["Currency"]),
+      status: clean(f["Status"]),
+      invoiceDate: num(f["Invoice Date"]),
     };
-    if (row.ir) irNos.add(row.ir);
-    for (const c of new Set(allCodes(plain(f["Project Code"])))) {
-      if (!byCode.has(c)) byCode.set(c, []);
-      byCode.get(c).push(row);
-    }
+    rows.push(row);
+    if (row.ir) push(byIr, row.ir, row);
+    for (const c of new Set(allCodes(plain(f["Project Code"])))) push(byCode, c, row);
   }
-  return { irNos, byCode };
+  return { rows, byIr, byCode, irNos: new Set(byIr.keys()) };
 }
 
 /* ======================= cards ======================= */
@@ -247,62 +262,6 @@ export function parCards(pars, briefs, uni, pendingCodes, rules) {
       submittedAt: num(f["Submitted at"]),
       targets, target, blocked: blocked ? "Push this project's brief first." : (reqNo ? "" : "No request number to copy."),
       notes,
-    });
-  }
-  cards.sort(bySubmittedDesc);
-  return { cards, hidden };
-}
-
-/* Invoice Requests not yet in Collections. One project can have many invoices,
-   so "already there" means a Collections row carries this request number. */
-export function invoiceCards(invoices, uni, coll, pendingCodes, rules) {
-  const cards = [], hidden = { ...emptyHidden(), notApproved: 0 };
-  for (const r of invoices) {
-    const f = r.fields || {};
-    if (clean(f["Initiator department"]) !== rules.department) { hidden.otherDept++; continue; }
-    if (f["IGNORE"] === true) { hidden.ignored++; continue; }
-    const reqNo = requestNo(f["Request No."]);
-    if (reqNo && coll.irNos.has(reqNo)) { hidden.done++; continue; }
-    const status = clean(f["Status"]);
-    if (rules.voidStatuses.includes(status)) { hidden.void++; continue; }
-    // Only approved requests are real invoices; the rest wait until they're approved.
-    if (!(rules.invoiceStatuses || ["Approved"]).includes(status)) { hidden.notApproved++; continue; }
-
-    const code = normCode(plain(f["Project Code"]));
-    const inUniverse = !!code && uni.byCode.has(code);
-    if (code && !inUniverse && !pendingCodes.has(code)) { hidden.noProject++; continue; }
-
-    const amount = num(f["Amount"]);
-    const currency = clean(f["Amount-Currency"]);
-    const existing = code ? coll.byCode.get(code) || [] : [];
-    const notes = [];
-    // Older Collections rows predate the request-number column, so they can't be
-    // matched exactly. Point them out so an invoice isn't recorded twice; a row
-    // with the same amount (as filed, or VAT-ex) is very likely this invoice.
-    const legacy = existing.filter(e => !e.ir);
-    const close = (a, b) => a !== null && b !== null && Math.abs(a - b) < 0.01;
-    const money = (e) => `${e.currency || "?"} ${e.amount === null ? "?" : e.amount.toLocaleString("en-US")}`;
-    const same = legacy.find(e => e.currency === currency && amount !== null
-                                  && (close(e.amount, amount) || close(e.amount, round2(amount / rules.vatDivisor))));
-    if (same) {
-      notes.push(`Collections already has “${same.arName}” (${money(same)}) for this project with no request ` +
-                 "number. It's likely this invoice; if so, ignore this card.");
-    } else if (legacy.length) {
-      notes.push(`Collections has ${legacy.length} older row${legacy.length === 1 ? "" : "s"} for this project with ` +
-                 `no request number (${legacy.slice(0, 2).map(e => `“${e.arName}” ${money(e)}`).join(", ")}` +
-                 `${legacy.length > 2 ? ", …" : ""}). Check this invoice isn't one of them.`);
-    }
-    let blocked = "";
-    if (!code) blocked = `Project Code "${clean(f["Project Code"])}" isn't a valid code.`;
-    else if (!inUniverse) blocked = "Push this project's brief first.";
-    else if (!reqNo) blocked = "No request number to copy.";
-    else if (amount === null) blocked = "The request has no Amount.";
-
-    cards.push({
-      kind: "invoice", id: r.record_id, record: r, code, name: clean(f["Project Name"]), status,
-      requestNo: reqNo, submittedAt: num(f["Submitted at"]),
-      amount, currency, businessUnit: clean(f["Business Unit"]),
-      existingCount: existing.length, notes, blocked,
     });
   }
   cards.sort(bySubmittedDesc);
@@ -508,21 +467,260 @@ export function parAfterAdding(current, reqNo) {
   return cur ? `${cur}, ${reqNo}` : reqNo;
 }
 
-/* Collections fields for an invoice request. `choices` = { arName }.
-   `options` = the Collections select options, so values never invent new ones. */
-export function collectionsFromInvoice(card, choices, options, rules) {
-  const out = {
-    "AR Name": (choices.arName || "").trim() || card.name,
-    "Project Code": card.code,
-    "Invoice Amount": card.amount,
-    "Invoice Request": Number(card.requestNo),
-    "Status": rules.collectionStatus[card.status] || rules.collectionStatusPending,
-  };
+/* ======================= Collections: the invoice lifecycle =======================
+
+   A Collections row moves through three stages (rules.collectionStages):
+     For Invoicing   the project is won (it has a PAR and an amount); nothing is filed yet
+     Pending …       an invoice request has been filed for it
+     For Collection  the request was approved and the invoice issued
+   A row can skip Pending when its request is approved straight away.
+
+   Each card is one change Polaris can push with a click:
+     won        a won project with no Collections row yet → a new For Invoicing row
+     filed      an invoice request under review → its row becomes Pending (or a new Pending row)
+     approved   an approved request → its row becomes For Collection (or a new row)
+     withdrawn  a request on a row was recalled or rejected → the row goes back to For Invoicing
+   So the same invoice request can come up twice: when it's filed, and again when it's approved.
+
+   A card's `targets` are the existing rows it can go on, each with an action:
+     attach   a row waiting for a request takes this one
+     advance  the row already carries this request; only its stage moves
+     link     an older row that's already invoiced but never got a request number:
+              only the number is added
+     reset    a withdrawn request comes off its row
+   `target` is the default (a row id, or "new" for a new row). */
+
+/* Whether Collections has a row for this project (rows marked Invalid don't count). */
+export const hasValidRow = (coll, code, rules) =>
+  (coll.byCode.get(code) || []).some(row => !(rules.invalidStatuses || []).includes(row.status));
+
+/* The Collections status a card's step leads to. */
+export function stepStatus(step, rules) {
+  const st = rules.collectionStages;
+  return { won: st.forInvoicing, filed: st.pending, approved: st.forCollection, withdrawn: st.forInvoicing }[step];
+}
+
+/* How well a free row fits a request: the same currency first, then the closest amount. */
+function fitScore(row, card) {
+  const gap = row.amount === null || card.amount === null ? 1e6
+    : Math.abs(row.amount - card.amount) / Math.max(Math.abs(card.amount), 1);
+  return (row.currency === card.currency ? 0 : 1e7) + gap;
+}
+
+const moneyOf = (row) => `${row.currency || "?"} ${row.amount === null ? "?" : row.amount.toLocaleString("en-US")}`;
+const near = (a, b, tol = 0.01) => a !== null && b !== null && Math.abs(a - b) < tol;
+
+/* Every change Collections needs, newest first. `invoices` = Invoice Request
+   records; `uni`/`coll` = the indexes above; `pendingCodes` = codes of briefs
+   still waiting as cards. Returns { cards, hidden } like the other lists. */
+export function collectionCards(invoices, uni, coll, pendingCodes, rules) {
+  const st = rules.collectionStages;
+  const cards = [], hidden = { ...emptyHidden(), closed: 0 };
+  const early = (row) => row.status === st.forInvoicing || row.status === st.pending;
+  const voidNos = new Set(invoices.filter(r => rules.voidStatuses.includes(clean((r.fields || {})["Status"])))
+    .map(r => requestNo(r.fields["Request No."])).filter(Boolean));
+  // A row waiting for a request: an early stage, with no live request on it.
+  const isFree = (row) => early(row) && (!row.ir || voidNos.has(row.ir));
+  // An older row that's already invoiced but has no (live) request number.
+  const isLegacy = (row) => !early(row) && !(rules.invalidStatuses || []).includes(row.status)
+                            && (!row.ir || voidNos.has(row.ir));
+  const projects = (code) => uni.byCode.get(code) || [];
+  const isClosed = (code) => projects(code).length > 0 && projects(code).every(u => rules.closedStatuses.includes(u.status));
+  const inCollections = (code) => hasValidRow(coll, code, rules);
+
+  const withdrawn = [];   // added last: a replacement request may take the row instead
+  const fresh = [];       // requests not in Collections yet, to be matched with free rows
+
+  for (const r of invoices) {
+    const f = r.fields || {};
+    const reqNo = requestNo(f["Request No."]);
+    const status = clean(f["Status"]);
+    const isVoid = rules.voidStatuses.includes(status);
+    const approved = status === rules.approvedStatus;
+    const card = {
+      kind: "invoice", id: r.record_id, record: r, source: "invoice", ignoreField: "IGNORE",
+      step: isVoid ? "withdrawn" : approved ? "approved" : "filed",
+      code: "", name: clean(f["Project Name"]), status, requestNo: reqNo,
+      submittedAt: num(f["Submitted at"]), completedAt: num(f["Completed at"]),
+      amount: num(f["Amount"]), currency: clean(f["Amount-Currency"]), businessUnit: clean(f["Business Unit"]),
+      targets: [], target: "new", canCreate: false, noNew: "", notes: [], blocked: "", existing: 0,
+    };
+
+    // Already on a row: move that row along, whichever department filed the request.
+    const carrying = reqNo ? coll.byIr.get(reqNo) || [] : [];
+    if (carrying.length) {
+      const row = isVoid || approved ? carrying.find(early) : carrying.find(x => x.status === st.forInvoicing);
+      if (!row) { if (isVoid) hidden.void++; else hidden.done++; continue; }
+      if (f["IGNORE"] === true) { hidden.ignored++; continue; }
+      card.code = row.code || normCode(plain(f["Project Code"]));
+      card.targets = [{ id: row.id, row, action: isVoid ? "reset" : "advance" }];
+      card.target = row.id;
+      (isVoid ? withdrawn : cards).push(card);
+      continue;
+    }
+
+    if (clean(f["Initiator department"]) !== rules.department) { hidden.otherDept++; continue; }
+    if (f["IGNORE"] === true) { hidden.ignored++; continue; }
+    if (isVoid) { hidden.void++; continue; }
+
+    // The project: the typed code, or failing that, the one its PAR is on in the Universe.
+    const typed = normCode(plain(f["Project Code"]));
+    const parNo = (clean(f["Associated Project Approval"]).match(/^(\d{12})/) || [])[1] || "";
+    const viaPar = [...new Set((uni.byPar.get(parNo) || []).flatMap(u => allCodes(u.codeText)))];
+    let code = typed;
+    if (!(typed && uni.byCode.has(typed)) && viaPar.length === 1) {
+      code = viaPar[0];
+      card.notes.push(`Its project code ${typed || `"${clean(f["Project Code"])}"`} isn't in the Universe; ` +
+                      `using ${code}, the project its PAR ${parNo} is on.`);
+    } else if (typed && viaPar.length && !viaPar.includes(typed)) {
+      card.notes.push(`Its PAR ${parNo} is on ${viaPar.join(", ")} in the Universe, not ${typed}. Check the project code.`);
+    }
+    card.code = code;
+    if (!code || !uni.byCode.has(code)) {
+      if (code && !pendingCodes.has(code)) { hidden.noProject++; continue; }
+      card.blocked = code ? "Push this project's brief first." : `Project Code "${clean(f["Project Code"])}" isn't a valid code.`;
+      cards.push(card);
+      continue;
+    }
+
+    const rows = coll.byCode.get(code) || [];
+    const free = rows.filter(isFree);
+    const legacy = approved ? rows.filter(isLegacy) : [];
+    if (isClosed(code) && !free.length) { hidden.closed++; continue; }
+    card.targets = [...free.map(row => ({ id: row.id, row, action: "attach" })),
+                    ...legacy.map(row => ({ id: row.id, row, action: "link" }))];
+    card.canCreate = true;
+    card.existing = rows.length;
+    if (!projects(code).some(u => u.par)) card.noNew = "Add this project's PAR to the Universe first.";
+    else if (card.amount === null) card.noNew = "The request has no Amount.";
+    if (!reqNo) card.blocked = "No request number to copy.";
+    fresh.push({ card, free, legacy });
+    cards.push(card);
+  }
+
+  // Each request takes at most one existing row and each row at most one request,
+  // best fits first. An invoiced row with no request number and exactly the
+  // request's amount (as filed, or VAT-ex) was recorded by hand before requests
+  // were tracked: it is that invoice (ties go to the request completed closest to
+  // the row's Invoice Date, then the older request). Then rows waiting in For
+  // Invoicing: the same currency first, then the closest amount.
+  const pairs = [];
+  for (const x of fresh) {
+    const c = x.card;
+    for (const row of x.legacy) {
+      if (c.amount === null || row.currency !== c.currency) continue;
+      if (!near(row.amount, c.amount) && !near(row.amount, round2(c.amount / rules.vatDivisor))) continue;
+      const gap = row.invoiceDate && c.completedAt ? Math.abs(row.invoiceDate - c.completedAt) / DAY_MS / 1e4 : 0.5;
+      pairs.push({ x, row, score: gap + (c.submittedAt || 0) / 1e16, link: true });
+    }
+    for (const row of x.free) pairs.push({ x, row, score: 1 + fitScore(row, c) });
+  }
+  pairs.sort((a, b) => a.score - b.score);
+  const taken = new Set(), placed = new Map();
+  for (const p of pairs) {
+    if (taken.has(p.row.id) || placed.has(p.x)) continue;
+    taken.add(p.row.id);
+    placed.set(p.x, p);
+    p.x.card.target = p.row.id;
+  }
+  for (const x of fresh) {
+    const c = x.card, p = placed.get(x);
+    if (p && p.link) {
+      c.notes.push(`“${p.row.arName}” (${moneyOf(p.row)}, ${p.row.status}) is most likely this invoice: it has ` +
+                   "the same amount and was recorded without a request number.");
+    } else if (p) {
+      if (p.row.currency && c.currency && p.row.currency !== c.currency) {
+        c.notes.push(`“${p.row.arName}” is in ${p.row.currency}; the request is in ${c.currency}.`);
+      }
+    } else {
+      const left = x.legacy.filter(e => !taken.has(e.id));
+      if (left.length) {
+        c.notes.push(`Collections has ${left.length} older row${left.length === 1 ? "" : "s"} for this project ` +
+                     `without a request number (${left.slice(0, 2).map(e => `“${e.arName}” ${moneyOf(e)}`).join(", ")}` +
+                     `${left.length > 2 ? ", …" : ""}). Check this invoice isn't one of them.`);
+      }
+      if (c.noNew && !c.blocked) c.blocked = c.noNew;
+    }
+  }
+
+  // A withdrawn request's row goes back to For Invoicing, unless a new request is taking it.
+  for (const w of withdrawn) {
+    const row = w.targets[0].row;
+    const taker = cards.find(c => c.target === row.id);
+    if (taker) {
+      taker.notes.push(`It replaces request ${w.requestNo} (${w.status.toLowerCase()}) on “${row.arName}”.`);
+      hidden.void++;
+      continue;
+    }
+    cards.push(w);
+  }
+
+  // Won projects (with a PAR) that have no Collections row and no request on its way.
+  const busy = new Set(cards.map(c => c.code).filter(Boolean));
+  const seen = new Set();
+  for (const u of uni.rows) {
+    if (!rules.wonStatuses.includes(u.status) || !u.par) continue;
+    const codes = [...new Set(allCodes(u.codeText))];
+    if (!codes.length || codes.some(c => inCollections(c) || busy.has(c) || seen.has(c))) continue;
+    codes.forEach(c => seen.add(c));
+    if (u.ignored) { hidden.ignored++; continue; }
+    const code = codes[0];
+    const dates = requestNos(u.par).map(n => requestDate(n, rules.utcOffsetHours)).filter(d => d !== null);
+    const card = {
+      kind: "invoice", id: u.id, record: null, source: "universe", ignoreField: rules.universeIgnoreField,
+      step: "won", code, name: u.project, status: u.status, requestNo: "",
+      submittedAt: dates.length ? Math.max(...dates) : null,
+      amount: u.amountInc ? round2(u.amountInc) : null, currency: "PHP", businessUnit: u.businessUnit,
+      targets: [], target: "new", canCreate: true, noNew: "", notes: [], blocked: "",
+    };
+    if (card.amount === null) card.blocked = card.noNew = "The Universe row has no amount yet.";
+    if (projects(code).length > 1) card.notes.push(`${projects(code).length} Universe rows share ${code}; this uses “${u.project}”.`);
+    cards.push(card);
+  }
+
+  cards.sort(bySubmittedDesc);
+  return { cards, hidden };
+}
+
+/* What pushing a Collections card writes. `choices` = { targetId, arName };
+   `options` = Collections' select options, so values never invent new ones.
+   Returns { mode: "create" | "update", rowId, action, fields, before, expect }:
+   `fields` in Lark's write format (null clears a cell), `before` the row's
+   current values of those fields, `expect` what the row must still say when
+   the push happens (else someone changed it meanwhile). */
+export function collectionsChange(card, choices, options, rules) {
+  const to = stepStatus(card.step, rules);
+  const t = card.targets.find(x => x.id === (choices.targetId || card.target)) || null;
   const currency = matchOption(card.currency, options["Currency"]);
-  if (currency) out["Currency"] = currency;
-  const bu = matchOption(card.businessUnit, options["Business Unit"]);
-  if (bu) out["Business Unit"] = bu;
-  return out;
+  if (!t) {
+    const out = { "AR Name": (choices.arName || "").trim() || card.name, "Project Code": card.code };
+    if (card.amount !== null) out["Invoice Amount"] = card.amount;
+    if (currency) out["Currency"] = currency;
+    if (card.requestNo) out["Invoice Request"] = Number(card.requestNo);
+    out["Status"] = to;
+    const bu = matchOption(card.businessUnit, options["Business Unit"]);
+    if (bu) out["Business Unit"] = bu;
+    return { mode: "create", rowId: null, action: "create", fields: out, before: {}, expect: null };
+  }
+  const row = t.row, out = {};
+  if (t.action === "reset") {
+    out["Invoice Request"] = null;
+    if (row.status !== to) out["Status"] = to;
+  } else if (t.action === "link") {
+    out["Invoice Request"] = Number(card.requestNo);
+  } else {
+    if (row.ir !== card.requestNo) out["Invoice Request"] = Number(card.requestNo);
+    if (row.status !== to) out["Status"] = to;
+    if (card.step === "approved") {   // the invoice as issued: its amount may differ from the plan
+      if (card.amount !== null && !near(row.amount, card.amount, 0.005)) out["Invoice Amount"] = card.amount;
+      if (currency && currency !== row.currency) out["Currency"] = currency;
+    }
+  }
+  const was = { "Invoice Request": row.ir ? Number(row.ir) : null, "Status": row.status || null,
+                "Invoice Amount": row.amount, "Currency": row.currency || null };
+  return { mode: "update", rowId: row.id, action: t.action, fields: out,
+           before: Object.fromEntries(Object.keys(out).map(k => [k, was[k]])),
+           expect: { status: row.status, ir: row.ir } };
 }
 
 /* ======================= read-back verification ======================= */

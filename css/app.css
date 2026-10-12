@@ -189,6 +189,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--b
 .badge-ok { background: var(--ok-soft); color: var(--ok); }
 .badge-warn { background: var(--warn-soft); color: var(--warn); }
 .badge-info { background: var(--info-soft); color: var(--info); }
+.badge-err { background: var(--danger-soft); color: var(--danger); }
 
 /* ---- top bar --------------------------------------------------------------- */
 .topbar {
@@ -302,11 +303,21 @@ main:focus { outline: none; }
 .notes li { font-size: 13px; padding: 7px 10px; border-radius: 10px; background: var(--warn-soft); color: var(--warn); }
 .notes li.is-block { background: var(--surface-2); color: var(--ink-2); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .notes li.is-block a { font-weight: 700; }
+/* Where a Collections card lands: “row” · From → To */
+.flow { display: flex; flex-direction: column; gap: 2px; font-size: 13px; color: var(--ink-2); }
+.notes li.flow { background: var(--surface-2); color: var(--ink-2); }
+.flow b { font-weight: 700; color: var(--ink); }
+.flow-row { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.flow-step { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 8px; }
+.flow-arrow { color: var(--muted); font-weight: 700; }
+.flow-sheet { padding: 9px 12px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--line); }
 .item-actions { display: flex; gap: 8px; margin-top: 12px; }
-.item-actions .btn { flex: 1 1 0; }
+.item-actions .btn, .item-actions .btn-wrap { flex: 1 1 0; }
+.btn-wrap { display: flex; }
+.btn-wrap .btn { flex: 1 1 auto; }
 @media (min-width: 560px) {
   .item-actions { justify-content: flex-end; }
-  .item-actions .btn { flex: 0 0 auto; min-width: 104px; }
+  .item-actions .btn, .item-actions .btn-wrap { flex: 0 0 auto; min-width: 104px; }
 }
 .empty { text-align: center; color: var(--muted); padding: 36px 12px; }
 .hidden-note { font-size: 12.5px; color: var(--muted); margin: 16px 4px 0; }
@@ -553,6 +564,12 @@ main:focus { outline: none; }
   .brand-name { display: none; }
   .tab { font-size: 13px; padding: 0 4px; gap: 4px; }
   .session-pill { padding: 0 10px; }
+}
+/* Five tabs don't fit a phone: the strip scrolls sideways (the page itself never does). */
+@media (max-width: 560px) {
+  .tabs { overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab { flex: 1 0 auto; padding: 0 10px; }
 }
 @media (hover: none) {
   .brand:hover .brand-mark { transform: none; }

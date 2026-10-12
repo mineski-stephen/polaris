@@ -1,11 +1,11 @@
 /* Polaris: which Lark tables it reads and writes, and the business rules it applies.
 
-   These links point at the TEST COPIES. To go live, replace them with the
-   production links. On every load the page re-checks each field it uses (name,
-   type and the select options it writes) and refuses to push if anything is
-   missing, so a renamed column fails loudly instead of writing bad data. */
+   Production and the test copies differ only in these links and ENV_LABEL. On
+   every load the page re-checks each field it uses (name, type and the select
+   options it writes) and refuses to push if anything is missing, so a renamed
+   column fails loudly instead of writing bad data. */
 
-export const ENV_LABEL = "";   // shown in the header; set to "" for production
+export const ENV_LABEL = "";   // shown in the header: "Test copy" for the test copies, "" for production
 
 export const TABLE_LINKS = {
   universe:    "https://mineskiglobal.larksuite.com/base/NP7TbjwHNaTyLOsWafelN9wNgEd?table=tblEmWYOXoAF70uf&view=vewFlJYfpR",
@@ -20,7 +20,7 @@ export const TABLE_LINKS = {
 };
 
 export const RULES = {
-  // Only briefs and invoice requests filed by this department become Universe cards.
+  // Only briefs and invoice requests filed by this department become cards.
   // ANDON takes briefs from every department.
   department: "Account Managers",
 
@@ -32,15 +32,29 @@ export const RULES = {
   newProjectStatus: "For CE/Pitch Creation",
   newProjectMancomPhase: "1. Client Brief Kickoff",
 
-  // Invoice requests only become cards once they have one of these statuses.
-  invoiceStatuses: ["Approved"],
-
   // Approval outcomes that mean the request is dead. These never become cards.
   voidStatuses: ["Rejected", "Recalled", "Canceled", "Deleted", "Terminated"],
+  // The invoice request status that means it was approved (and the invoice issued).
+  approvedStatus: "Approved",
 
-  // Collections.Status for a new row, by the invoice request's approval status.
-  collectionStatus: { Approved: "For Invoicing" },
-  collectionStatusPending: "Pending Invoice Request Approval",
+  // Collections.Status, in the order a row moves through it:
+  //   won project (has a PAR) → For Invoicing → request filed → Pending… → approved → For Collection.
+  collectionStages: {
+    forInvoicing: "For Invoicing",
+    pending: "Pending Invoice Request Approval",
+    forCollection: "For Collection",
+  },
+  // Collections rows marked as void: Polaris never puts a request on them.
+  invalidStatuses: ["Invalid"],
+  // Universe statuses of a won project that's still being billed. These get a
+  // For Invoicing row once they have a PAR and an amount.
+  wonStatuses: ["Won - Awaiting CE Signature", "Signed CE", "For Collection"],
+  // Universe statuses of finished or dead projects: Polaris adds no new
+  // Collections rows for them (it still moves along rows that are already there).
+  closedStatuses: ["For Closing", "Fully Closed", "Lost", "Stalled", "Archived"],
+  // Optional checkbox column on the Universe that hides a won project from the
+  // Invoices list. Ignore stays off for those cards until the column exists.
+  universeIgnoreField: "IGNORE",
 
   // Date-only fields (RFP Received Date) are stored as midnight in this offset.
   utcOffsetHours: 8,    // Asia/Manila

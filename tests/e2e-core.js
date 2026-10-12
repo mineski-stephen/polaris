@@ -6,21 +6,22 @@
    page, it:
      1. snapshots every stored (non-computed) field of all five tables,
      2. pushes the newest brief, a PAR (preferring one that appends to an
-        existing PAR) and the newest clean invoice, then ignores and un-ignores
+        existing PAR), one Collections change that adds a row and (if there is
+        one) one that moves an existing row along, then ignores and un-ignores
         a brief,
      3. re-pushes each one and expects "already done" (no duplicates),
      4. snapshots again and requires the difference to be exactly:
         one new Universe row, one Universe PAR cell, one new Collections row,
-        and nothing else anywhere. */
+        the moved row's changed cells, and nothing else anywhere. */
 
 import { ENV_LABEL, RULES } from "../js/config.js";
 import {
   loadEverything, loadFields, loadRecords, selectOptions, getRecord,
-  pushBrief, pushPar, pushInvoice, pushAndon, writableOnly, setIgnore, AlreadyDone, newClientToken, TABLE_TITLES,
+  pushBrief, pushPar, pushCollections, pushAndon, writableOnly, setIgnore, AlreadyDone, newClientToken, TABLE_TITLES,
 } from "../js/ops.js";
 import {
-  indexUniverse, indexCollections, briefCards, parCards, invoiceCards,
-  universeFromBrief, collectionsFromInvoice, defaultVat, verifyWritten, parAfterAdding, plain,
+  indexUniverse, indexCollections, briefCards, parCards, collectionCards, collectionsChange,
+  universeFromBrief, defaultVat, verifyWritten, parAfterAdding, plain,
   peoplePool, universeView, andonFromBrief, pmPool,
 } from "../js/sync.js";
 
@@ -89,22 +90,24 @@ export async function runE2E(call, T, log) {
 
   const { fields, problems, data } = await loadEverything(call, T, RULES);
   ok(problems.length === 0, `schema check (${problems.length} problems)`);
-  const uni = indexUniverse(data.universe);
+  const uni = indexUniverse(data.universe, { ignoreField: RULES.universeIgnoreField });
   const coll = indexCollections(data.collections);
   const briefs = briefCards(data.brief, uni, RULES);
   const pending = new Set(briefs.cards.map(c => c.code));
   const pars = parCards(data.par, data.brief, uni, pending, RULES);
-  const invoices = invoiceCards(data.invoice, uni, coll, pending, RULES);
+  const invoices = collectionCards(data.invoice, uni, coll, pending, RULES);
+  const collOptions = Object.fromEntries(["Currency", "Business Unit"].map(n =>
+    [n, selectOptions(fields.collections.find(f => f.field_name === n))]));
+  const plan = (c) => collectionsChange(c, {}, collOptions, RULES);
 
   const brief = briefs.cards.find(c => !c.problems.length);
   const par = pars.cards.find(c => !c.blocked && c.target.par && c.targets.length === 1)
            || pars.cards.find(c => !c.blocked && c.targets.length === 1);
-  const invoice = invoices.cards.find(c => !c.blocked && !c.notes.length);
+  // One change that adds a Collections row, and one that moves a row along (a different project).
+  const invoice = invoices.cards.find(c => !c.blocked && !c.notes.length && plan(c).mode === "create");
+  const mover = invoices.cards.find(c => !c.blocked && plan(c).mode === "update" && c.code !== (invoice && invoice.code));
   const ignoreMe = briefs.cards.find(c => c !== brief);
   if (!brief || !par || !invoice || !ignoreMe) { log("Not enough cards to test with."); return 1; }
-
-  const collOptions = Object.fromEntries(["Currency", "Business Unit"].map(n =>
-    [n, selectOptions(fields.collections.find(f => f.field_name === n))]));
 
   /* ---------- 1. brief → Universe ---------- */
   log(`\n1. Push brief ${brief.code} “${brief.name}” (${brief.currency} ${brief.value}, ${brief.status})`);
@@ -150,10 +153,11 @@ export async function runE2E(call, T, log) {
     ok(false, "second push of the same PAR was refused");
   } catch (e) { ok(e instanceof AlreadyDone, `second push of the same PAR was refused (${e.message})`); }
 
-  /* ---------- 3. invoice → Collections ---------- */
-  log(`\n3. Push invoice ${invoice.requestNo} → ${invoice.code} (${invoice.currency} ${invoice.amount}, ${invoice.status})`);
-  const invFields = collectionsFromInvoice(invoice, { arName: "" }, collOptions, RULES);
-  const i1 = await pushInvoice(call, T, RULES, invoice, invFields, newClientToken());
+  /* ---------- 3. Collections: a new row, and a row moved along ---------- */
+  log(`\n3. ${invoice.step}: ${invoice.code} ${invoice.requestNo} → a new Collections row (${invoice.currency} ${invoice.amount})`);
+  const invChange = plan(invoice);
+  const invFields = invChange.fields;
+  const i1 = await pushCollections(call, T, RULES, invoice, invChange, newClientToken());
   ok(i1.mismatches && i1.mismatches.length === 0,
      `all ${Object.keys(invFields).length} Collections fields match on read-back` +
      (i1.mismatches && i1.mismatches.length ? `: ${JSON.stringify(i1.mismatches)}` : ""));
@@ -162,9 +166,20 @@ export async function runE2E(call, T, log) {
      `Collections' lookups found the project in the Universe: “${plain(newC.fields["Project Name"])}”, ` +
      `PAR “${plain(newC.fields["PAR"])}”, AM “${plain(newC.fields["AM"])}”`);
   try {
-    await pushInvoice(call, T, RULES, invoice, invFields, newClientToken());
-    ok(false, "second push of the same invoice was refused");
-  } catch (e) { ok(e instanceof AlreadyDone, `second push of the same invoice was refused (${e.message})`); }
+    await pushCollections(call, T, RULES, invoice, invChange, newClientToken());
+    ok(false, "second push of the same change was refused");
+  } catch (e) { ok(e instanceof AlreadyDone, `second push of the same change was refused (${e.message})`); }
+  let moved = null;
+  if (mover) {
+    moved = plan(mover);
+    log(`\n3b. ${mover.step}: ${mover.code} ${mover.requestNo} → ${moved.action} row ${moved.rowId}: ${JSON.stringify(moved.fields)}`);
+    const m1 = await pushCollections(call, T, RULES, mover, moved, newClientToken());
+    ok(m1.mismatches && m1.mismatches.length === 0, `the moved row reads back as sent ${JSON.stringify(m1.mismatches)}`);
+    try {
+      await pushCollections(call, T, RULES, mover, moved, newClientToken());
+      ok(false, "pushing the same move again was refused");
+    } catch (e) { ok(e instanceof AlreadyDone, `pushing the same move again was refused (${e.message})`); }
+  } else log("\n3b. No change that moves an existing row; skipped.");
 
   /* ---------- 4. ignore + undo ---------- */
   log(`\n4. Ignore then restore brief ${ignoreMe.code}`);
@@ -191,8 +206,11 @@ export async function runE2E(call, T, log) {
   ok(d.universe.added.length === 1 && d.universe.added[0] === b1.recordId, "Universe: exactly one new row, the pushed brief");
   ok(d.universe.changed.length === 1 && d.universe.changed[0].id === par.target.id
      && d.universe.changed[0].fields.join() === "PAR", "Universe: exactly one changed row, and only its PAR cell");
-  ok(d.collections.added.length === 1 && d.collections.added[0] === i1.recordId && !d.collections.changed.length,
-     "Collections: exactly one new row, nothing else changed");
+  ok(d.collections.added.length === 1 && d.collections.added[0] === i1.recordId, "Collections: exactly one new row");
+  ok(moved ? d.collections.changed.length === 1 && d.collections.changed[0].id === moved.rowId
+             && d.collections.changed[0].fields.sort().join() === Object.keys(moved.fields).sort().join()
+           : !d.collections.changed.length,
+     moved ? `Collections: the moved row changed only in ${Object.keys(moved.fields).join(", ")}` : "Collections: no other row changed");
   for (const k of ["brief", "par", "invoice"]) {
     ok(!d[k].added.length && !d[k].removed.length && !d[k].changed.length, `${TABLE_TITLES[k]}: unchanged`);
   }
@@ -210,7 +228,8 @@ export async function runE2E(call, T, log) {
 
   log(`\nRecords written (test copy):\n  Universe new row  ${b1.recordId}  (${brief.code})\n` +
       `  Universe PAR      ${par.target.id}  (${par.code}: “${par.target.par || ""}” → “${p1.written.PAR}”)\n` +
-      `  Collections row   ${i1.recordId}  (request ${invoice.requestNo})\n` +
+      `  Collections row   ${i1.recordId}  (${invoice.step} ${invoice.code} ${invoice.requestNo})\n` +
+      (moved ? `  Collections moved ${moved.rowId}  (${mover.step} ${mover.requestNo}: ${JSON.stringify(moved.before)} → ${JSON.stringify(moved.fields)})\n` : "") +
       `  Brief IGNORE      ${ignoreMe.id}  (${ignoreMe.code}: ticked, then cleared)`);
   log(failures ? `\n${failures} check(s) FAILED.` : "\nAll end-to-end checks passed ✓");
   return failures;

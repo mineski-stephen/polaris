@@ -4,7 +4,7 @@
 
 import { ENV_LABEL, TABLE_LINKS, RULES } from "./config.js";
 import { parseBaseLink, loadEverything, loadUniverse, selectOptions, TABLE_TITLES, computedTypes } from "./ops.js";
-import { indexUniverse, indexCollections, briefCards, parCards, invoiceCards, peoplePool, pmPool } from "./sync.js";
+import { indexUniverse, indexCollections, briefCards, parCards, collectionCards, stepStatus, peoplePool, pmPool } from "./sync.js";
 import { $, $$, h, ic, toast, fmt, store, recall, sleep } from "./ui.js";
 import { ICONS } from "./icons.js";
 import {
@@ -30,6 +30,7 @@ const S = {
   fields: null,
   problems: [],
   tableProblems: {},
+  kindProblems: {},
   lists: null,              // { brief, par, invoice }: { cards, hidden }
   pool: [], pmPool: [], clients: [], statusOrder: [],
   loading: false, quiet: false, waking: false, stages: {}, loadError: null, loadedAt: 0,
@@ -57,7 +58,8 @@ const TABLES_FOR = {
   brief: ["brief", "universe"], par: ["par", "brief", "universe"],
   invoice: ["invoice", "collections", "universe"], andon: ["brief", "andon"],
 };
-const problemsFor = (kind) => (TABLES_FOR[kind] || []).flatMap(t => S.tableProblems[t] || []);
+const problemsFor = (kind) => [...(TABLES_FOR[kind] || []).flatMap(t => S.tableProblems[t] || []),
+                                ...(S.kindProblems[kind] || [])];
 const canWriteFor = (kind) => auth.canWrite() && problemsFor(kind).length === 0;
 const canWriteNow = () => auth.canWrite() && S.problems.length === 0;
 const fieldsOf = (table) => (S.fields && S.fields[table]) || [];
@@ -130,6 +132,13 @@ function render() {
       t.setAttribute("aria-selected", String(on));
       const n = t.querySelector("[data-count]");
       if (n) n.textContent = S.lists && S.lists[n.dataset.count] ? String(S.lists[n.dataset.count].cards.length) : "";
+    }
+    // On a phone the tab strip scrolls: keep the open tab in view.
+    const strip = $(".tabs"), open = strip.querySelector('[aria-selected="true"]');
+    if (open && strip.scrollWidth > strip.clientWidth) {
+      const left = open.offsetLeft - 8, right = open.offsetLeft + open.offsetWidth + 8;
+      if (left < strip.scrollLeft) strip.scrollLeft = left;
+      else if (right > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = right - strip.clientWidth;
     }
     inbox.render();
     universe.render();
@@ -235,6 +244,7 @@ async function loadData({ quiet = false } = {}) {
     S.fields = res.fields;
     S.problems = res.problems;
     S.tableProblems = res.tableProblems;
+    S.kindProblems = res.kindProblems || {};
     S.loadedAt = Date.now();
     recompute();
   } catch (err) {
@@ -250,14 +260,14 @@ async function loadData({ quiet = false } = {}) {
 
 function recompute() {
   const d = S.data;
-  const uni = indexUniverse(d.universe);
+  const uni = indexUniverse(d.universe, { ignoreField: RULES.universeIgnoreField });
   const coll = indexCollections(d.collections);
   const brief = briefCards(d.brief, uni, RULES);
   const pending = new Set(brief.cards.map(c => c.code).filter(Boolean));
   S.lists = {
     brief,
     par: parCards(d.par, d.brief, uni, pending, RULES),
-    invoice: invoiceCards(d.invoice, uni, coll, pending, RULES),
+    invoice: collectionCards(d.invoice, uni, coll, pending, RULES),
   };
   if (d.andon) {
     S.lists.andon = briefCards(d.brief, indexUniverse(d.andon), RULES,
@@ -300,21 +310,20 @@ async function afterPush(c, res, payload, extra = {}) {
   } else if (c.kind === "par") {
     const row = d.universe.find(r => r.record_id === res.recordId);
     if (row) row.fields["PAR"] = res.written.PAR;
+  } else if (res.mode === "update") {     // a Collections row moved along
+    const row = d.collections.find(r => r.record_id === res.recordId);
+    if (row) Object.assign(row.fields, res.written);
   } else {
-    d.collections.push({ record_id: res.recordId, fields: {
-      "Project Code": payload["Project Code"], "Invoice Request": payload["Invoice Request"],
-      "AR Name": payload["AR Name"], "Invoice Amount": payload["Invoice Amount"], "Currency": payload["Currency"] || "",
-    } });
+    d.collections.push({ record_id: res.recordId, fields: { ...payload } });
   }
   recompute();
   render();
 
   const what = c.kind === "brief" || c.kind === "andon" ? c.code : `${c.code} · ${c.requestNo}`;
-  const title = {
+  const title = c.kind === "invoice" ? collectionsTitle(c, res, extra) : {
     andon: `Added ${what} to ANDON.`,
     brief: `Pushed ${what} to the Universe.`,
     par: `Added PAR ${c.requestNo} to ${c.code}.`,
-    invoice: `Added ${c.requestNo} to Collections.`,
   }[c.kind];
   const n = Object.keys(res.written).length;
   const dest = { invoice: "collections", andon: "andon" }[c.kind] || "universe";
@@ -337,6 +346,16 @@ async function afterPush(c, res, payload, extra = {}) {
     await refreshUniverse();
     render();
   }
+}
+
+/* What a Collections push did, in a sentence. */
+function collectionsTitle(c, res, extra) {
+  const to = stepStatus(c.step, RULES);
+  const row = extra.rowName ? `“${extra.rowName}”` : "The row";
+  if (res.mode === "create") return `Added ${c.requestNo ? `request ${c.requestNo}` : c.code} to Collections as ${to}.`;
+  if (extra.action === "link") return `Added request ${c.requestNo} to ${row}.`;
+  if (extra.action === "reset") return `${row} is back to ${to}.`;
+  return `${row} is now ${to}.`;
 }
 
 /* ======================= settings ======================= */

@@ -2,9 +2,9 @@
    sheet (with the BD picker), and Ignore with Undo. */
 
 import { RULES } from "./config.js";
-import { TABLE_TITLES, pushBrief, pushPar, pushInvoice, pushAndon, setIgnore, AlreadyDone, newClientToken, writableOnly } from "./ops.js";
+import { TABLE_TITLES, pushBrief, pushPar, pushCollections, pushAndon, setIgnore, AlreadyDone, newClientToken, writableOnly } from "./ops.js";
 import {
-  universeFromBrief, collectionsFromInvoice, parAfterAdding, defaultVat, amountFormula, vatMentions,
+  universeFromBrief, collectionsChange, stepStatus, parAfterAdding, defaultVat, amountFormula, vatMentions,
   vatExAmount, people, andonFromBrief,
 } from "./sync.js";
 import { $, h, ic, toast, fmt, flash, reduceMotion, copyable } from "./ui.js";
@@ -12,11 +12,17 @@ import { describe, isDeadToken, conn, uploadToBase } from "./net.js";
 
 const NOUN = { brief: "briefs", par: "PARs", invoice: "invoices", andon: "briefs for ANDON" };
 const STAGE_ORDER = ["universe", "brief", "par", "invoice", "collections", "andon"];
-// The table each card comes from (ANDON cards are Project Briefs too).
+// The table each card comes from (ANDON cards are Project Briefs too; invoice
+// cards say which table they come from themselves: a won project is a Universe row).
 const SOURCE = { brief: "brief", par: "par", invoice: "invoice", andon: "brief" };
+const sourceOf = (c) => c.source || SOURCE[c.kind];
 // One IGNORE box on the brief hides it from both the Universe and ANDON lists.
-const ignoreField = () => "IGNORE";
-const BADGE = { "Approved": "badge-ok", "Under Review": "badge-warn", "Processing": "badge-info" };
+const ignoreFieldOf = (c) => c.ignoreField || "IGNORE";
+const BADGE = { "Approved": "badge-ok", "Under Review": "badge-warn", "Processing": "badge-info", "Won": "badge-ok" };
+const VOID_BADGE = "badge-err";
+// A sheet that's cancelled keeps what was typed, per card and step (a request
+// comes back as a new card when it's approved).
+const draftKey = (c) => `${c.kind}:${c.step || ""}:${c.id}`;
 const DATE_FIELDS = new Set(["Project Start", "Project End", "RFP Received Date"]);
 // Shown as inputs at the top of the brief sheet, so not repeated under "Also written".
 const BRIEF_INPUTS = new Set(["Client", "BD", "VAT%", "Amount (VAT-Ex.) (PHP)", "Other Links"]);
@@ -99,7 +105,8 @@ export function createInbox(ctx) {
     empty.textContent = q ? `No ${NOUN[S.tab]} match "${q.trim()}".`
       : { brief: "Every brief is in the Universe. Nice work!",
           par: "Every PAR is in the Universe. Nice work!",
-          invoice: "Every invoice is in Collections. Nice work!" }[S.tab];
+          invoice: "Collections is up to date. Nice work!",
+          andon: "Every brief is in ANDON. Nice work!" }[S.tab];
     hiddenNote.textContent = hiddenSummary(list.hidden);
     S.entering.clear();
     if (S.flashCard) {
@@ -111,10 +118,10 @@ export function createInbox(ctx) {
 
   function hiddenSummary(hd) {
     const label = {
-      done: { invoice: "already in Collections", andon: "already in ANDON" }[S.tab] || "already in the Universe",
+      done: { invoice: "already up to date in Collections", andon: "already in ANDON" }[S.tab] || "already in the Universe",
       ignored: "ignored", void: "rejected, recalled or cancelled",
       otherDept: "from other departments", noProject: "for projects not in the Universe",
-      notApproved: "not approved yet",
+      closed: "for closed or lost projects",
     };
     const parts = Object.keys(label).filter(k => hd[k] > 0).map(k => `${hd[k].toLocaleString()} ${label[k]}`);
     return parts.length ? `Not shown: ${parts.join(" · ")}.` : "";
@@ -140,43 +147,70 @@ export function createInbox(ctx) {
               t && t.par ? ` (already has ${t.par})` : ""];
       c.notes.forEach(n => notes.push(h("li", null, `Note: ${n}`)));
     } else {
+      const t = c.targets.find(x => x.id === c.target);
       meta = [c.amount !== null ? h("b", null, fmt.money(c.amount, c.currency)) : "No amount",
-              " · request ", copyable(c.requestNo),
-              c.existingCount ? ` · ${c.existingCount} in Collections for this project` : ""];
+              c.step === "won" ? ` · Amount (VAT-Inc.) · Universe: ${c.status}` : [" · request ", copyable(c.requestNo)],
+              !t && c.existing ? ` · ${c.existing} already in Collections for this project` : ""];
+      notes.unshift(h("li", { class: "flow" }, flowEl(c, c.target)));
       c.notes.forEach(n => notes.push(h("li", null, `Note: ${n}`)));
     }
-    if (c.blocked) {
-      const brief = c.blocked.startsWith("Push this project's brief")
-        ? S.lists.brief.cards.find(b => b.code === c.code) : null;
-      notes.push(h("li", { class: "is-block" }, c.blocked,
-        brief ? h("a", { href: "#/briefs", onclick: () => { S.flashCard = brief.id; S.query.brief = ""; } }, "Go to the brief") : null));
-    }
+    if (c.blocked) notes.push(h("li", { class: "is-block" }, c.blocked, fixLink(c.blocked, c.code)));
     const pushable = writable && !c.blocked && !(c.problems && c.problems.length);
-    const canIgnore = writable;
+    // A won project is hidden with an IGNORE box on its Universe row, if the Universe has one.
+    const ignorable = c.source !== "universe" || ctx.hasField("universe", ignoreFieldOf(c));
+    const canIgnore = writable && ignorable;
+    const ignoreTitle = c.kind === "brief" || c.kind === "andon" ? "Hides this brief from both the Universe and ANDON lists"
+      : !ignorable ? `To hide won projects here, add a checkbox column named “${ignoreFieldOf(c)}” to the Universe.`
+      : c.source === "universe" ? `Ticks ${ignoreFieldOf(c)} on the project's Universe row` : null;
+    const badge = c.step === "won" ? "Won" : c.status;
     return h("article", { class: "card item" + (S.working.has(c.id) ? " is-working" : "") + (S.entering.has(c.id) ? " is-entering" : ""),
                           "data-id": c.id },
       h("div", { class: "item-head" },
         h("span", { class: "code" }, c.code || "No code"),
-        c.status ? h("span", { class: `badge ${BADGE[c.status] || ""}` }, c.status) : null,
+        badge ? h("span", { class: `badge ${BADGE[badge] || (RULES.voidStatuses.includes(badge) ? VOID_BADGE : "")}` }, badge) : null,
         h("span", { class: "item-date" }, fmt.day(c.submittedAt))),
       h("h3", null, c.name || "(no name)"),
       h("p", { class: "item-meta" }, meta),
       notes.length ? h("ul", { class: "notes" }, notes) : null,
       h("div", { class: "item-actions" },
-        h("button", { type: "button", class: "btn btn-ghost", disabled: !canIgnore,
-          title: c.kind === "brief" || c.kind === "andon" ? "Hides this brief from both the Universe and ANDON lists" : null,
-          onclick: (e) => ignore(c, true, e.currentTarget) }, "Ignore"),
+        h("span", { class: "btn-wrap", title: ignoreTitle },
+          h("button", { type: "button", class: "btn btn-ghost", disabled: !canIgnore,
+            onclick: (e) => ignore(c, true, e.currentTarget) }, "Ignore")),
         h("button", { type: "button", class: "btn btn-tonal", disabled: !pushable, onclick: () => openSheet(c) }, "Push")));
+  }
+
+  /* Where a Collections card lands: the row (“AR name”), then From → To. */
+  function flowEl(c, targetId) {
+    const t = c.targets.find(x => x.id === targetId);
+    const to = stepStatus(c.step, RULES);
+    const arrow = h("span", { class: "flow-arrow", "aria-label": "becomes" }, "→");
+    if (!t) return [h("span", { class: "flow-step" }, "New Collections row", arrow, h("b", null, to))];
+    const name = h("span", { class: "flow-row" }, `“${t.row.arName || "(no AR name)"}”`);
+    if (t.action === "link") return [name, h("span", { class: "flow-step" }, `${t.row.status} · adds the request number`)];
+    return [name, h("span", { class: "flow-step" }, t.row.status || "No status", arrow, h("b", null, to))];
+  }
+
+  /* A link to the card that clears a blocker, if it's in the lists. */
+  function fixLink(reason, code) {
+    if (reason.startsWith("Push this project's brief")) {
+      const brief = S.lists.brief.cards.find(b => b.code === code);
+      return brief ? h("a", { href: "#/briefs", onclick: () => { S.flashCard = brief.id; S.query.brief = ""; } }, "Go to the brief") : null;
+    }
+    if (reason.startsWith("Add this project's PAR")) {
+      const par = S.lists.par.cards.find(p => p.code === code);
+      return par ? h("a", { href: "#/pars", onclick: () => { S.flashCard = par.id; S.query.par = ""; } }, "Go to the PAR") : null;
+    }
+    return null;
   }
 
   /* ======================= ignore / undo (optimistic) ======================= */
   async function ignore(c, value, button) {
     if (S.working.has(c.id)) return;
-    const src = SOURCE[c.kind], box = ignoreField(c.kind);
+    const src = sourceOf(c), box = ignoreFieldOf(c);
     const rec = (S.data[src] || []).find(r => r.record_id === c.id);
     if (!rec) return;
     const before = rec.fields[box];
-    const what = c.kind === "brief" || c.kind === "andon" ? c.code : `${c.code} · ${c.requestNo}`;
+    const what = c.requestNo && c.kind !== "brief" && c.kind !== "andon" ? `${c.code} · ${c.requestNo}` : c.code;
     const apply = (v) => { rec.fields[box] = v; ctx.recompute(); ctx.render(); };
 
     if (value && button) {   // let the card slide out, then drop it
@@ -217,7 +251,7 @@ export function createInbox(ctx) {
   cancel.addEventListener("click", () => { if (!sheet || !sheet.busy) dialog.close(); });
   dialog.addEventListener("cancel", (e) => { if (sheet && sheet.busy) e.preventDefault(); });
   dialog.addEventListener("close", () => {
-    if (sheet && !sheet.done) S.drafts.set(sheet.card.id, { choices: sheet.choices, clientToken: sheet.clientToken, targetId: sheet.targetId });
+    if (sheet && !sheet.done) S.drafts.set(draftKey(sheet.card), { choices: sheet.choices, clientToken: sheet.clientToken, targetId: sheet.targetId });
     sheet = null;
   });
   $("#sheetForm").addEventListener("submit", (e) => e.preventDefault());   // Enter in a field mustn't send
@@ -225,20 +259,26 @@ export function createInbox(ctx) {
 
   function defaults(c) {
     if (c.kind === "brief") return { vat: defaultVat(c.currency), client: "", bd: [], otherLinks: "", showLinks: false };
-    if (c.kind === "invoice") return { arName: c.name, invoiceNo: "", siNo: "", invoiceDate: "", files: [], showDetails: false };
+    if (c.kind === "invoice") {
+      return { targetId: c.target, arName: c.name, invoiceNo: "", siNo: "", invoiceDate: "", files: [], showDetails: false };
+    }
     if (c.kind === "andon") return { pm: [], tribe: "" };
     return {};
   }
 
   function openSheet(c) {
-    const draft = S.drafts.get(c.id);
+    const draft = S.drafts.get(draftKey(c));
     sheet = {
       card: c,
       choices: draft ? { ...draft.choices } : defaults(c),
       clientToken: draft ? draft.clientToken : newClientToken(),
       targetId: (draft && draft.targetId) || (c.target && c.target.id) || null,
-      busy: false, done: false,
+      busy: false, done: false, blocked: "",
     };
+    // A draft's row may have gone (the list was refreshed): fall back to the card's default.
+    if (c.kind === "invoice" && sheet.choices.targetId !== "new" && !c.targets.some(t => t.id === sheet.choices.targetId)) {
+      sheet.choices.targetId = c.target;
+    }
     $("#sheetTitle").textContent = { brief: "Push to Universe", par: "Add PAR to Universe", invoice: "Add to Collections", andon: "Add to ANDON" }[c.kind];
     $("#sheetSub").textContent = `${c.code}${(c.kind === "par" || c.kind === "invoice") && c.requestNo ? ` · request ${c.requestNo}` : ""} · ${c.name}`;
     go.querySelector(".btn-label").textContent = { brief: "Push to Universe", par: "Add PAR", invoice: "Add to Collections", andon: "Add to ANDON" }[c.kind];
@@ -257,7 +297,7 @@ export function createInbox(ctx) {
 
   function setBusy(busy) {
     if (sheet) sheet.busy = busy;
-    go.disabled = busy;
+    go.disabled = busy || !!(sheet && sheet.blocked);
     cancel.disabled = busy;
     const label = go.querySelector(".btn-label");
     go.querySelector(".spinner")?.remove();
@@ -396,25 +436,66 @@ export function createInbox(ctx) {
     refresh();
   }
 
-  /* --- invoice --- */
+  /* --- invoice (a Collections change) --- */
+  // The sheet's title and button, for what the chosen row goes through.
+  function verbs(c, action) {
+    if (action === "create") return ["Add to Collections", "Add to Collections"];
+    if (action === "link") return ["Add the request number", "Add the number"];
+    if (action === "reset") return ["Move back to For Invoicing", "Move back"];
+    return c.step === "filed" ? ["Mark as pending approval", "Mark pending"] : ["Move to For Collection", "Move to For Collection"];
+  }
+  const rowMoney = (row) => (row.amount === null ? "no amount" : fmt.money(row.amount, row.currency));
+  const cellText = (k, v) => (v === null || v === undefined || v === "" ? "(empty)"
+    : k === "Invoice Amount" ? fmt.money(v) : String(v));
+
   function buildInvoice(body, c) {
     const ch = sheet.choices;
+    const opts = ctx.collectionOptions();
+    const flow = h("p", { class: "flow flow-sheet" });
+    const arField = h("div", { class: "field" });
+    const blockNote = h("p", { class: "note", role: "status" });
     const written = h("dl", { class: "written" });
+    const details = h("div", { class: "field" });
     const refresh = () => {
-      const payload = collectionsFromInvoice(c, ch, ctx.collectionOptions(), RULES);
-      written.replaceChildren(...Object.entries(payload).filter(([k]) => k !== "AR Name").flatMap(([k, v]) => [
-        h("dt", null, k),
-        h("dd", null, k === "Invoice Amount" ? fmt.money(v) : String(v)),
-      ]));
+      const change = collectionsChange(c, ch, opts, RULES);
+      const [title, label] = verbs(c, change.action);
+      $("#sheetTitle").textContent = title;
+      if (!sheet.busy) go.querySelector(".btn-label").textContent = label;
+      flow.replaceChildren(...flowEl(c, ch.targetId));
+      arField.hidden = change.mode !== "create";
+      details.hidden = c.step !== "approved";
+      sheet.blocked = change.mode === "create" ? c.noNew : "";
+      blockNote.hidden = !sheet.blocked;
+      blockNote.textContent = sheet.blocked;
+      go.disabled = sheet.busy || !!sheet.blocked;
+      written.replaceChildren(...Object.entries(change.fields)
+        .filter(([k]) => change.mode !== "create" || k !== "AR Name")
+        .flatMap(([k, v]) => [h("dt", null, k), h("dd", null, cellText(k, v),
+          change.mode === "update" ? h("span", { class: "why" }, change.before[k] === null || change.before[k] === undefined
+            ? "Was empty." : `Was ${cellText(k, change.before[k])}.`) : null)]));
     };
     sheet.refresh = refresh;
+
+    // Which row, when there's a choice: rows waiting for a request, older rows
+    // without a request number, or a new row.
+    const rows = [...c.targets.map(t => [t.id, `${t.row.arName || "(no AR name)"} · ${rowMoney(t.row)} · ` +
+                    `${t.row.status || "no status"}${t.row.ir ? ` · request ${t.row.ir}` : ""}` +
+                    `${t.action === "link" ? " · add the number only" : ""}`]),
+                  ...(c.canCreate ? [["new", "New row"]] : [])];
+    let picker = null;
+    if (rows.length > 1) {
+      const sel = h("select", { id: "sheetRow" }, rows.map(([v, text]) => h("option", { value: v }, text)));
+      sel.value = ch.targetId;
+      sel.addEventListener("change", () => { ch.targetId = sel.value; refresh(); });
+      picker = fieldEl("Collections row", false, h("label", { class: "select" }, sel), "sheetRow");
+    }
     const ar = h("input", { type: "text", id: "sheetAr", autocomplete: "off" });
     ar.value = ch.arName;
     ar.addEventListener("input", () => { ch.arName = ar.value; refresh(); });
+    arField.replaceChildren(h("label", { class: "label", for: "sheetAr" }, "AR Name"), ar);
 
-    // Invoice details, if finance has already issued the invoice (optional; they can
-    // also be added later from the Collections pane).
-    const details = h("div", { class: "field" });
+    // Invoice details, once the request is approved and the invoice issued (optional;
+    // they can also be added later from the Collections pane).
     const showDetails = () => {
       const text = (id, key, label, placeholder) => {
         const el = h("input", { type: "text", id, autocomplete: "off", placeholder });
@@ -446,10 +527,10 @@ export function createInbox(ctx) {
     else details.replaceChildren(h("button", { type: "button", class: "linkish", onclick: () => {
       ch.showDetails = true; showDetails(); $("#sheetInvNo").focus(); } }, ic("plus"), "Add invoice details (number, SI, date, file)"));
 
-    put(body, fieldEl("AR Name", false, ar, "sheetAr"),
+    put(body, picker, flow, arField, blockNote,
                 c.notes.length ? h("p", { class: "note" }, `Note: ${c.notes.join(" ")}`) : null,
                 details,
-                h("p", { class: "subhead" }, "Also written"), written);
+                h("p", { class: "subhead" }, "Will be written"), written);
     refresh();
   }
 
@@ -490,11 +571,15 @@ export function createInbox(ctx) {
       } else if (c.kind === "par") {
         res = await pushPar(ctx.call, ctx.tables, RULES, c, s.targetId);
       } else {
-        payload = { ...collectionsFromInvoice(c, s.choices, ctx.collectionOptions(), RULES), ...await invoiceDetails(s.choices) };
-        res = await pushInvoice(ctx.call, ctx.tables, RULES, c, payload, s.clientToken);
+        const change = collectionsChange(c, s.choices, ctx.collectionOptions(), RULES);
+        if (c.step === "approved") Object.assign(change.fields, await invoiceDetails(s.choices));
+        payload = change.fields;
+        const t = c.targets.find(x => x.id === change.rowId);
+        extra = { action: change.action, rowName: t ? t.row.arName : payload["AR Name"] };
+        res = await pushCollections(ctx.call, ctx.tables, RULES, c, change, s.clientToken);
       }
       s.done = true;
-      S.drafts.delete(c.id);
+      S.drafts.delete(draftKey(c));
       S.working.delete(c.id);
       setBusy(false);
       dialog.close();
@@ -504,9 +589,9 @@ export function createInbox(ctx) {
       setBusy(false);
       if (err instanceof AlreadyDone) {
         s.done = true;
-        S.drafts.delete(c.id);
+        S.drafts.delete(draftKey(c));
         dialog.close();
-        toast(err.message, { type: "warn", detail: "Someone else already did this. The list has been refreshed." });
+        toast(err.message, { type: "warn", detail: err.detail || "Someone else already did this. The list has been refreshed." });
         ctx.loadData({ quiet: true });
         return;
       }

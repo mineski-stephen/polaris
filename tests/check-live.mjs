@@ -2,15 +2,16 @@
    Run: npm run check:live   (add --json to print the card lists as JSON)
 
    1. Every field the page uses exists with the right type and options.
-   2. Builds the three card lists exactly as the page does and prints them.
+   2. Builds the card lists exactly as the page does and prints them.
    3. For every card, builds the payload the page would write and checks it is
-      well-formed (types, select options, canonical codes, no blanks). */
+      well-formed (types, select options, canonical codes, no blanks), and that
+      each Collections change still fits the row it would update. */
 
 import { RULES } from "../js/config.js";
 import { loadEverything, selectOptions, writableOnly } from "../js/ops.js";
 import {
-  indexUniverse, indexCollections, briefCards, parCards, invoiceCards,
-  universeFromBrief, collectionsFromInvoice, defaultVat, normCode, andonFromBrief,
+  indexUniverse, indexCollections, briefCards, parCards, collectionCards, collectionsChange, hasValidRow,
+  universeFromBrief, defaultVat, normCode, andonFromBrief,
 } from "../js/sync.js";
 import { tenantToken, makeCall, tables } from "./lark-node.mjs";
 
@@ -27,12 +28,12 @@ const fail = (msg) => { failures++; console.log("  ✗ " + msg); };
 console.log("\nSchema:", problems.length ? "" : "all fields present with expected types ✓");
 problems.forEach(fail);
 
-const uni = indexUniverse(data.universe);
+const uni = indexUniverse(data.universe, { ignoreField: RULES.universeIgnoreField });
 const coll = indexCollections(data.collections);
 const briefs = briefCards(data.brief, uni, RULES);
 const pending = new Set(briefs.cards.map(c => c.code).filter(Boolean));
 const pars = parCards(data.par, data.brief, uni, pending, RULES);
-const invoices = invoiceCards(data.invoice, uni, coll, pending, RULES);
+const invoices = collectionCards(data.invoice, uni, coll, pending, RULES);
 
 const day = (ms) => (ms ? new Date(ms).toISOString().slice(0, 10) : "----------");
 const opts = (key, name) => selectOptions(fields[key].find(f => f.field_name === name));
@@ -74,13 +75,41 @@ for (const c of pars.cards) {
               c.notes.map(n => `\n${" ".repeat(13)}! ${n}`).join(""));
 }
 
-console.log(`\nInvoice cards: ${invoices.cards.length}  hidden: ${JSON.stringify(invoices.hidden)}`);
-for (const c of invoices.cards) {
-  if (coll.irNos.has(c.requestNo)) fail(`Invoice ${c.requestNo} is already in Collections but shows as a card`);
-  if (!c.blocked) checkPayload(c.requestNo, collectionsFromInvoice(c, { arName: "" }, collOpts, RULES), collOpts);
-  console.log(`  ${day(c.submittedAt)} ${c.requestNo} → ${c.code || "(no code)"} ${c.status.padEnd(12)} ` +
-              `${c.currency} ${String(c.amount).padStart(11)} ${c.blocked ? "[blocked] " : ""}${c.name.slice(0, 40)}` +
-              c.notes.map(n => `\n${" ".repeat(13)}! ${n}`).join(""));
+console.log(`\nInvoice cards (Collections changes): ${invoices.cards.length}  hidden: ${JSON.stringify(invoices.hidden)}`);
+const STAGES = Object.values(RULES.collectionStages);
+const early = (row) => row.status === RULES.collectionStages.forInvoicing || row.status === RULES.collectionStages.pending;
+const seenReq = new Set(), seenRow = new Set();
+for (const step of ["won", "filed", "approved", "withdrawn"]) {
+  const list = invoices.cards.filter(c => c.step === step);
+  console.log(`  ${step}: ${list.length}`);
+  for (const c of list) {
+    const label = `${c.code} ${c.requestNo || "(won)"}`;
+    const ch = collectionsChange(c, {}, collOpts, RULES);
+    if (c.requestNo) { if (seenReq.has(c.requestNo)) fail(`${label}: request on two cards`); seenReq.add(c.requestNo); }
+    if (ch.mode === "update") {
+      if (seenRow.has(ch.rowId)) fail(`${label}: row ${ch.rowId} is the default for two cards`);
+      seenRow.add(ch.rowId);
+      const row = coll.rows.find(r => r.id === ch.rowId);
+      if (!row) fail(`${label}: target row ${ch.rowId} isn't in Collections`);
+      else if (ch.action === "link" ? early(row) : !early(row)) fail(`${label}: ${ch.action} on a ${row.status} row`);
+      if (!Object.keys(ch.fields).length) fail(`${label}: nothing to write`);
+      for (const [k, v] of Object.entries(ch.fields)) {
+        if (k === "Status" && !STAGES.includes(v)) fail(`${label}: Status "${v}" isn't a stage`);
+        if (k === "Invoice Request" && v !== null && v !== Number(c.requestNo)) fail(`${label}: wrong request number ${v}`);
+        if (k === "Invoice Request" && v === null && c.step !== "withdrawn") fail(`${label}: clears a request`);
+        if (collOpts[k] && v !== null && !collOpts[k].includes(v)) fail(`${label}: ${k} = "${v}" is not an existing option`);
+      }
+    } else if (!c.blocked) {
+      checkPayload(label, ch.fields, collOpts);
+      if (c.requestNo && coll.byIr.has(c.requestNo)) fail(`${label}: a new row for a request already in Collections`);
+      if (c.step === "won" && hasValidRow(coll, c.code, RULES)) fail(`${label}: a won project already in Collections`);
+    }
+    const t = c.targets.find(x => x.id === ch.rowId);
+    const where = t ? `${ch.action} “${t.row.arName.slice(0, 34)}” (${t.row.status})` : "new row";
+    console.log(`    ${day(c.submittedAt)} ${label.padEnd(26)} ${c.currency} ${String(c.amount).padStart(12)} → ${where}` +
+                `${c.blocked ? `  [blocked: ${c.blocked}]` : ""}  ${JSON.stringify(ch.fields)}` +
+                c.notes.map(n => `\n${" ".repeat(17)}! ${n}`).join(""));
+  }
 }
 
 if (data.andon) {

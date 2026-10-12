@@ -7,7 +7,7 @@
    exactly the same push logic. */
 
 import {
-  indexUniverse, indexCollections, verifyWritten, parAfterAdding, clean,
+  indexUniverse, indexCollections, verifyWritten, parAfterAdding, clean, hasValidRow,
 } from "./sync.js";
 
 export const OPEN_API = "https://open.larksuite.com/open-apis";
@@ -48,7 +48,7 @@ export function schemaSpec(rules) {
       // Everything the cards and the Universe view need; `index` is the lean set
       // re-read just before a push to rule out duplicates.
       read: ["Project Code", "Project", "Client", "PAR", "Amount (VAT-Ex.) (PHP)", "BD", "AM",
-             "RFP Received Date", "Status", "Year"],
+             "RFP Received Date", "Status", "Year", "Amount (VAT-Inc.)", "Business Unit", rules.universeIgnoreField],
       index: ["Project Code", "Project", "Client", "PAR"],
       fields: {
         "Client": T.text, "Project": T.text, "Project Code": T.text, "PAR": T.text,
@@ -58,23 +58,28 @@ export function schemaSpec(rules) {
         "RFP Received Date": T.date, "Year": T.text, "Status": T.select,
         "Mancom Phase": T.select, "Other Links": T.text,
       },
+      // Hides a won project from the Invoices list, if the Universe has this column.
+      optional: { [rules.universeIgnoreField]: T.checkbox },
       options: {
         "VAT%": ["12%", "0%"],
         "Status": [rules.newProjectStatus],
         "Mancom Phase": [rules.newProjectMancomPhase],
       },
+      // Read-only columns (formulas, lookups) that only the Invoices list needs:
+      // if one is missing, only invoice pushes stop.
+      neededBy: { invoice: ["Amount (VAT-Inc.)", "Business Unit"] },
     },
     collections: {
       read: ["Project Code", "Invoice Request", "AR Name", "Invoice Amount", "Currency", "Sales Remarks", "Status",
              "AM", "Invoice Number", "SI Number", "Invoice", "Invoice Date"],
-      index: ["Project Code", "Invoice Request", "AR Name", "Invoice Amount", "Currency"],
+      index: ["Project Code", "Invoice Request", "AR Name", "Invoice Amount", "Currency", "Status"],
       fields: {
         "AR Name": T.text, "Project Code": T.text, "Invoice Amount": T.number,
         "Currency": T.select, "Status": T.select, "Business Unit": T.select, "Invoice Request": T.number,
         "Sales Remarks": T.text, "Invoice Number": T.text, "SI Number": T.text, "Invoice": 17, "Invoice Date": T.date,
       },
       options: {
-        "Status": [...new Set([...Object.values(rules.collectionStatus), rules.collectionStatusPending])],
+        "Status": Object.values(rules.collectionStages),
       },
     },
     brief: {
@@ -111,6 +116,9 @@ export function schemaSpec(rules) {
         "Business Unit": T.select, "Project Name": T.text, "Project Code": T.text,
         "Amount": T.number, "Amount-Currency": T.select, "IGNORE": T.checkbox,
       },
+      // Used when present: the PAR a request belongs to (to find its project when
+      // the typed code is wrong) and when it was approved (to match older rows).
+      optional: { "Associated Project Approval": T.text, "Completed at": T.date },
     },
   };
 }
@@ -180,6 +188,16 @@ export function checkSchema(key, fields, spec) {
   return problems;
 }
 
+/* Problems with columns only one kind of push needs (spec.neededBy), by kind. */
+export function checkNeeded(key, fields, spec) {
+  const names = new Set(fields.map(f => f.field_name));
+  const out = {};
+  for (const [kind, list] of Object.entries(spec.neededBy || {})) {
+    out[kind] = list.filter(n => !names.has(n)).map(n => `${TABLE_TITLES[key]}: column “${n}” is missing.`);
+  }
+  return out;
+}
+
 export const computedTypes = COMPUTED;
 export const selectOptions = (field) => ((field && field.property && field.property.options) || []).map(o => o.name);
 
@@ -188,24 +206,30 @@ export const selectOptions = (field) => ((field && field.property && field.prope
 export async function loadEverything(call, tables, rules, onProgress) {
   const spec = schemaSpec(rules);
   const keys = Object.keys(spec);
-  const fields = {}, data = {}, tableProblems = {};
+  const fields = {}, data = {}, tableProblems = {}, kindProblems = {};
   await Promise.all(keys.filter(k => tables[k]).map(async (k) => {
     fields[k] = await loadFields(call, tables[k]);
     tableProblems[k] = checkSchema(k, fields[k], spec[k]);
+    for (const [kind, list] of Object.entries(checkNeeded(k, fields[k], spec[k]))) {
+      kindProblems[kind] = [...(kindProblems[kind] || []), ...list];
+    }
     const present = new Set(fields[k].map(f => f.field_name));
-    const want = (spec[k].read || [...Object.keys(spec[k].fields), ...Object.keys(spec[k].optional || {})])
+    const want = [...new Set(spec[k].read || [...Object.keys(spec[k].fields), ...Object.keys(spec[k].optional || {})])]
       .filter(n => present.has(n));
     data[k] = await loadRecords(call, tables[k], want, (n, total) => onProgress && onProgress(k, n, total));
   }));
-  // `problems`: every table; `tableProblems`: by table, so a broken ANDON only stops ANDON pushes.
-  return { fields, problems: Object.values(tableProblems).flat(), tableProblems, data };
+  // `problems`: every table; `tableProblems`: by table, so a broken ANDON only stops ANDON
+  // pushes; `kindProblems`: columns only one kind of push needs.
+  return { fields, problems: [...Object.values(tableProblems).flat(), ...Object.values(kindProblems).flat()],
+           tableProblems, kindProblems, data };
 }
 
 /* ======================= writes ======================= */
 
-/* A push the destination already has (someone else got there first). Nothing was written. */
+/* A push the destination already has, or a row that changed since the list was
+   loaded (someone else got there first). Nothing was written. */
 export class AlreadyDone extends Error {
-  constructor(message) { super(message); this.name = "AlreadyDone"; }
+  constructor(message, detail) { super(message); this.name = "AlreadyDone"; this.detail = detail || ""; }
 }
 
 export function newClientToken() {
@@ -300,15 +324,38 @@ export async function pushAndon(call, tables, rules, card, fields, clientToken) 
   return { recordId: rec.record_id, written: fields, ...await readBack(call, tables.andon, rec.record_id, fields) };
 }
 
-/* Invoice request → new Collections row, unless one already carries its request number. */
-export async function pushInvoice(call, tables, rules, card, fields, clientToken) {
+/* One Collections change (built by collectionsChange in sync.js, plus any invoice
+   details): a new row, or an update to the row the card was built from.
+
+   Collections is re-read first, and nothing is written if the change no longer
+   applies: the request is already on a row (for a new row or another row), the
+   won project already has a row, or the target row's Status or request number
+   changed since the list was loaded. Then it writes, reads back and compares. */
+export async function pushCollections(call, tables, rules, card, change, clientToken) {
   const coll = indexCollections(await loadRecords(call, tables.collections, schemaSpec(rules).collections.index));
-  if (coll.irNos.has(card.requestNo)) {
-    throw new AlreadyDone(`Invoice request ${card.requestNo} is already in Collections.`);
+  const n = card.requestNo;
+  const carrying = n ? coll.byIr.get(n) || [] : [];
+  if (change.mode === "create") {
+    if (carrying.length) throw new AlreadyDone(`Request ${n} is already in Collections.`);
+    if (card.step === "won" && hasValidRow(coll, card.code, rules)) throw new AlreadyDone(`${card.code} is already in Collections.`);
+    const rec = await createRecord(call, tables.collections, change.fields, clientToken);
+    return { mode: "create", recordId: rec.record_id, written: change.fields, before: {},
+             ...await readBack(call, tables.collections, rec.record_id, change.fields) };
   }
-  const rec = await createRecord(call, tables.collections, fields, clientToken);
-  return { recordId: rec.record_id, written: fields,
-           ...await readBack(call, tables.collections, rec.record_id, fields) };
+  const row = coll.rows.find(r => r.id === change.rowId);
+  if (!row) throw new Error("That Collections row no longer exists. Refresh and try again.");
+  if (row.status !== change.expect.status || row.ir !== change.expect.ir) {
+    throw new AlreadyDone(`“${row.arName || "That row"}” changed since the list was loaded.`,
+      `It now says ${row.status || "no status"}${row.ir ? `, request ${row.ir}` : ", no request"}. Nothing was written; the list has been refreshed.`);
+  }
+  // A request goes on one row: stop if another row picked it up meanwhile.
+  if (change.fields["Invoice Request"] && carrying.some(r => r.id !== row.id)) {
+    throw new AlreadyDone(`Request ${n} is already on another Collections row.`);
+  }
+  if (!Object.keys(change.fields).length) throw new AlreadyDone(`“${row.arName}” already says this.`);
+  await updateRecord(call, tables.collections, row.id, change.fields);
+  return { mode: "update", recordId: row.id, written: change.fields, before: change.before,
+           ...await readBack(call, tables.collections, row.id, change.fields) };
 }
 
 /* The Collections table again, fresh from Lark. */
