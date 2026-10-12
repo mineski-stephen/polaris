@@ -103,7 +103,8 @@ const briefs = [
   brief("recB02", "2026TEG-P0240"),                                              // already in Universe
   brief("recB03", "2025TEG-P0313"),                                              // in Universe with trailing space
   brief("recB04", "2026TEG-P0300", { "IGNORE": true }),
-  brief("recB05", "2026TEG-P0301", { "Initiator department": seg("Sales") }),
+  brief("recB05", "2026TEG-P0301", { "Initiator department": seg("Finance") }),
+  brief("recB09", "2025TEG-P0110", { "Initiator department": seg("Sales"), "Submitted at": 1700000000001 }),   // Account Managers' old name
   brief("recB06", "2026TEG-P0302", { "Status": "Rejected" }),
   brief("recB07", "2026TEG-P0093", { "Project Name": seg("Color Game (CasinoPlus PH Rebranding & After Party)"),
                                      "Submitted at": 1700000000000 }),
@@ -113,9 +114,10 @@ const briefs = [
 test("brief cards: scope, filters and newest first", () => {
   const uni = indexUniverse(universe);
   const { cards, hidden } = briefCards(briefs, uni, RULES);
-  assert.deepEqual(cards.map(c => c.code), ["2026TEG-P0286", "2026TEG-P0093"]);
+  // "Sales" (Account Managers' old name) counts; other departments don't.
+  assert.deepEqual(cards.map(c => c.code), ["2026TEG-P0286", "2025TEG-P0110", "2026TEG-P0093"]);
   assert.deepEqual(hidden, { otherDept: 1, ignored: 1, done: 3, void: 1, noProject: 0 });
-  assert.equal(cards[1].similar.code, "2026TEG-P0092");      // likely re-filing flagged
+  assert.equal(cards[2].similar.code, "2026TEG-P0092");      // likely re-filing flagged
   assert.equal(cards[0].similar, null);
 });
 
@@ -201,7 +203,7 @@ const lifeInvoices = [
   inv("iX", "202609200009", "2026TEG-P0507", "Approved", 999),                  // already For Collection
   inv("iK", "202610010008", "2025TEG-P0510", "Approved", 1000,                  // typo'd code, right PAR
       { "Associated Project Approval": seg("202609015555-Someone-Project Approval-2026-09-01 10:00:00") }),
-  inv("iS", "202610010009", "2026TEG-P0501", "Approved", 1, { "Initiator department": seg("Sales") }),
+  inv("iS", "202610010009", "2026TEG-P0501", "Approved", 1, { "Initiator department": seg("Finance") }),
   inv("iI", "202610010010", "2026TEG-P0501", "Approved", 1, { "IGNORE": true }),
   inv("iV", "202610010011", "2026TEG-P0501", "Rejected", 1),
   inv("iN", "202610010012", "2023TEG-P0001", "Approved", 1),                    // project not in the Universe
@@ -235,6 +237,13 @@ test("won project → a new For Invoicing row with Amount (VAT-Inc.)", () => {
   });
   assert.equal(collectionsChange(won, { arName: " Alpha Fest DP " }, OPTS, RULES).fields["AR Name"], "Alpha Fest DP");
   assert.equal(cards.find(c => c.id === "uJ").blocked, "The Universe row has no amount yet.");
+  // "Mark invalid": a new row with Status Invalid, allowed even without an amount.
+  assert.deepEqual(collectionsChange(cards.find(c => c.id === "uJ"), { invalid: true }, OPTS, RULES).fields, {
+    "AR Name": "Project 0509", "Project Code": "2026TEG-P0509", "Currency": "PHP", "Status": "Invalid",
+    "Business Unit": "PDEI-Event Service" });
+  // Only won projects can be marked invalid; a request's change is unaffected.
+  assert.equal(collectionsChange(cards.find(c => c.id === "iB1"), { invalid: true }, OPTS, RULES).fields["Status"],
+               "Pending Invoice Request Approval");
 });
 
 test("request filed → its row becomes Pending: the request number and status only", () => {
@@ -296,10 +305,11 @@ test("request withdrawn → back to For Invoicing, unless a new request takes th
 });
 
 test("a request already on a row follows it, whichever department filed it", () => {
-  const sales = inv("iS2", "202609200004", "2026TEG-P0507", "Approved", 100, { "Initiator department": seg("Sales") });
+  const sales = inv("iS2", "202609200004", "2026TEG-P0507", "Approved", 100, { "Initiator department": seg("Finance") });
   const { cards } = collectionCards([sales], indexUniverse(lifeUniverse), indexCollections(lifeCollections), new Set(), RULES);
   assert.deepEqual(cards.filter(c => c.step !== "won").map(c => [c.id, c.step, c.target]), [["iS2", "approved", "cH1"]]);
-  assert.deepEqual(cards.filter(c => c.step === "won").map(c => c.id).sort(), ["uA", "uJ", "uK"]);   // no request on its way
+  // No request on its way for these; uK isn't one because its Invalid row keeps it out.
+  assert.deepEqual(cards.filter(c => c.step === "won").map(c => c.id).sort(), ["uA", "uJ"]);
   assert.deepEqual(collectionsChange(cards[0], {}, OPTS, RULES).fields, { "Status": "For Collection" });
 });
 

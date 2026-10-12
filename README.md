@@ -70,10 +70,10 @@ All five tables are read **in full**, never through a view (the Universe view in
 the link shows only part of the table; reading through it would make projects
 look missing and get them added twice).
 
-**Project Briefs:** `Initiator department` is *Account Managers*, `IGNORE` isn't
-ticked, the `Project Code` isn't in any Universe row, and the status isn't
-Rejected, Recalled, Canceled, Deleted or Terminated. (The department was called
-*Sales* before Oct 2025; those older briefs are out of scope.) Codes are compared
+**Project Briefs:** `Initiator department` is *Account Managers* or *Sales* (its
+name before Oct 2025; the same goes for invoice requests everywhere in Polaris),
+`IGNORE` isn't ticked, the `Project Code` isn't in any Universe row, and the status
+isn't Rejected, Recalled, Canceled, Deleted or Terminated. Codes are compared
 in canonical form, so `"2025TEG-P0313 "` with a trailing space still counts.
 A card says *Note: looks like "…" (code), already in the Universe* when a Universe
 project has a very similar name: usually a re-filed brief to ignore.
@@ -128,6 +128,11 @@ So one invoice request comes up twice: when it's filed, and again when it's appr
 - **Ignore** ticks the request's IGNORE box. For a *Won* card it ticks an
   **IGNORE** checkbox on the project's Universe row, which the Universe doesn't
   have yet: until someone adds that column, Ignore is greyed out on *Won* cards.
+- **Mark invalid** (on *Won* cards) is the way to keep a won project out of the
+  list without that column: it adds the project to Collections with Status
+  **Invalid** (it works even when the project has no amount). Any Collections
+  row for a project, Invalid included, means it's no longer offered as *Won*.
+  To undo it, delete or change that row in Collections.
 
 ---
 
@@ -234,7 +239,9 @@ pencil, to edit) on the Collections row: the sheet saves only what you changed, 
 first (PDF or image, up to 10 MB each, the most the connection service takes),
 then reads the row back to confirm. Clearing a field empties it in Lark.
 
-**Request numbers** on PAR and invoice cards copy to the clipboard when clicked.
+**Click to copy.** Request numbers, project codes, PAR numbers, invoice numbers and
+SI numbers copy to the clipboard when clicked: on cards (including inside notes),
+in the push sheets, and in the Universe and Collections tables.
 
 ## Safety checks
 

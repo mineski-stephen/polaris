@@ -7,7 +7,7 @@
    exactly the same push logic. */
 
 import {
-  indexUniverse, indexCollections, verifyWritten, parAfterAdding, clean, hasValidRow,
+  indexUniverse, indexCollections, verifyWritten, parAfterAdding, clean,
 } from "./sync.js";
 
 export const OPEN_API = "https://open.larksuite.com/open-apis";
@@ -79,7 +79,7 @@ export function schemaSpec(rules) {
         "Sales Remarks": T.text, "Invoice Number": T.text, "SI Number": T.text, "Invoice": 17, "Invoice Date": T.date,
       },
       options: {
-        "Status": Object.values(rules.collectionStages),
+        "Status": [...Object.values(rules.collectionStages), ...rules.invalidStatuses],
       },
     },
     brief: {
@@ -337,7 +337,7 @@ export async function pushCollections(call, tables, rules, card, change, clientT
   const carrying = n ? coll.byIr.get(n) || [] : [];
   if (change.mode === "create") {
     if (carrying.length) throw new AlreadyDone(`Request ${n} is already in Collections.`);
-    if (card.step === "won" && hasValidRow(coll, card.code, rules)) throw new AlreadyDone(`${card.code} is already in Collections.`);
+    if (card.step === "won" && coll.byCode.has(card.code)) throw new AlreadyDone(`${card.code} is already in Collections.`);
     const rec = await createRecord(call, tables.collections, change.fields, clientToken);
     return { mode: "create", recordId: rec.record_id, written: change.fields, before: {},
              ...await readBack(call, tables.collections, rec.record_id, change.fields) };

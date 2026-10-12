@@ -5,7 +5,7 @@
 import { collectionsView, collectionRow, invoiceDetailsPatch, shortName } from "./sync.js";
 import { saveInvoiceDetails, loadCollections } from "./ops.js";
 import { RULES } from "./config.js";
-import { $, h, ic, fmt, flash, store, recall, toast, reduceMotion } from "./ui.js";
+import { $, h, ic, fmt, flash, store, recall, toast, reduceMotion, copyable, copyableText } from "./ui.js";
 import { describe, isDeadToken, uploadToBase } from "./net.js";
 
 const KEY = { sort: "polaris.colSort", collapsed: "polaris.colCollapsed" };
@@ -71,11 +71,15 @@ export function createCollections(ctx) {
 
   function rowEl(r, canEdit) {
     const td = (cls, ...kids) => h("td", { class: cls }, ...kids);
-    const sub = [r.invoiceNo, r.siNo ? `SI ${r.siNo}` : "", r.invoiceDate ? fmt.dayOnly(r.invoiceDate) : "",
-                 r.files.length ? `${r.files.length} file${r.files.length === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ");
+    // Under the AR name: invoice and SI numbers (click to copy), date, file count.
+    const sub = [r.invoiceNo ? copyable(r.invoiceNo, { label: "invoice number" }) : "",
+                 r.siNo ? ["SI ", copyable(r.siNo, { label: "SI number" })] : "",
+                 r.invoiceDate ? fmt.dayOnly(r.invoiceDate) : "",
+                 r.files.length ? `${r.files.length} file${r.files.length === 1 ? "" : "s"}` : ""]
+      .filter(x => x !== "").flatMap((x, i) => (i ? [" · ", x] : [x]));
     return h("tr", { class: "urow", "data-id": r.id },
-      td("c-ar", r.arName || h("span", { class: "none" }, "(no AR name)"), sub ? h("span", { class: "sub-line" }, sub) : null),
-      td("c-code", r.code),
+      td("c-ar", r.arName || h("span", { class: "none" }, "(no AR name)"), sub.length ? h("span", { class: "sub-line" }, sub) : null),
+      td("c-code", r.code ? copyableText(r.code) : ""),
       td("c-amount num", r.amount !== null ? fmt.money(r.amount) : ""),
       td("c-cur", r.currency),
       td("c-remarks", r.remarks ? h("span", { class: "clip", title: r.remarks }, r.remarks) : ""),
@@ -124,7 +128,7 @@ export function createCollections(ctx) {
 
   function openDetails(r) {
     edit = { row: r, files: r.files.map(f => ({ ...f })), busy: false };
-    $("#detailsSub").textContent = `${r.arName || r.code}${r.request ? ` · request ${r.request}` : ""}`;
+    $("#detailsSub").replaceChildren(r.arName || r.code, r.request ? [" · request ", copyable(r.request)] : "");
     $("#dInvoiceNo").value = r.invoiceNo;
     $("#dSiNo").value = r.siNo;
     $("#dDate").value = toInput(r.invoiceDate);

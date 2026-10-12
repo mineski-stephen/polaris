@@ -7,7 +7,7 @@ import {
   universeFromBrief, collectionsChange, stepStatus, parAfterAdding, defaultVat, amountFormula, vatMentions,
   vatExAmount, people, andonFromBrief,
 } from "./sync.js";
-import { $, h, ic, toast, fmt, flash, reduceMotion, copyable } from "./ui.js";
+import { $, h, ic, toast, fmt, flash, reduceMotion, copyable, copyableText } from "./ui.js";
 import { describe, isDeadToken, conn, uploadToBase } from "./net.js";
 
 const NOUN = { brief: "briefs", par: "PARs", invoice: "invoices", andon: "briefs for ANDON" };
@@ -137,22 +137,22 @@ export function createInbox(ctx) {
               c.kind === "andon" && c.department ? ` · ${c.department}` : ""];
       c.problems.forEach(p => notes.push(h("li", { class: "is-block" }, p)));
       if (c.similar) {
-        notes.push(h("li", null, `Note: looks like "${c.similar.project}"${c.similar.code ? ` (${c.similar.code})` : ""}, ` +
-          `already in ${c.kind === "andon" ? "ANDON" : "the Universe"}. If it's the same project, ignore this one.`));
+        notes.push(h("li", null, copyableText(`Note: looks like "${c.similar.project}"${c.similar.code ? ` (${c.similar.code})` : ""}, ` +
+          `already in ${c.kind === "andon" ? "ANDON" : "the Universe"}. If it's the same project, ignore this one.`)));
       }
     } else if (c.kind === "par") {
       const t = c.target;
       meta = ["PAR ", copyable(c.requestNo),
               t ? ` · goes to "${t.project || t.codeText}"` : "",
-              t && t.par ? ` (already has ${t.par})` : ""];
-      c.notes.forEach(n => notes.push(h("li", null, `Note: ${n}`)));
+              t && t.par ? [" (already has ", copyableText(t.par), ")"] : ""];
+      c.notes.forEach(n => notes.push(h("li", null, copyableText(`Note: ${n}`))));
     } else {
       const t = c.targets.find(x => x.id === c.target);
       meta = [c.amount !== null ? h("b", null, fmt.money(c.amount, c.currency)) : "No amount",
               c.step === "won" ? ` · Amount (VAT-Inc.) · Universe: ${c.status}` : [" · request ", copyable(c.requestNo)],
               !t && c.existing ? ` · ${c.existing} already in Collections for this project` : ""];
       notes.unshift(h("li", { class: "flow" }, flowEl(c, c.target)));
-      c.notes.forEach(n => notes.push(h("li", null, `Note: ${n}`)));
+      c.notes.forEach(n => notes.push(h("li", null, copyableText(`Note: ${n}`))));
     }
     if (c.blocked) notes.push(h("li", { class: "is-block" }, c.blocked, fixLink(c.blocked, c.code)));
     const pushable = writable && !c.blocked && !(c.problems && c.problems.length);
@@ -166,7 +166,7 @@ export function createInbox(ctx) {
     return h("article", { class: "card item" + (S.working.has(c.id) ? " is-working" : "") + (S.entering.has(c.id) ? " is-entering" : ""),
                           "data-id": c.id },
       h("div", { class: "item-head" },
-        h("span", { class: "code" }, c.code || "No code"),
+        copyable(c.code, { label: "project code", cls: "code", empty: h("span", { class: "code" }, "No code") }),
         badge ? h("span", { class: `badge ${BADGE[badge] || (RULES.voidStatuses.includes(badge) ? VOID_BADGE : "")}` }, badge) : null,
         h("span", { class: "item-date" }, fmt.day(c.submittedAt))),
       h("h3", null, c.name || "(no name)"),
@@ -176,13 +176,17 @@ export function createInbox(ctx) {
         h("span", { class: "btn-wrap", title: ignoreTitle },
           h("button", { type: "button", class: "btn btn-ghost", disabled: !canIgnore,
             onclick: (e) => ignore(c, true, e.currentTarget) }, "Ignore")),
+        // A won project that shouldn't be billed: a Collections row marked Invalid keeps it off the list.
+        c.step === "won" ? h("button", { type: "button", class: "btn btn-ghost", disabled: !writable,
+          title: "Adds this project to Collections with Status Invalid, so it stops showing here",
+          onclick: () => openSheet(c, { invalid: true }) }, "Mark invalid") : null,
         h("button", { type: "button", class: "btn btn-tonal", disabled: !pushable, onclick: () => openSheet(c) }, "Push")));
   }
 
   /* Where a Collections card lands: the row (“AR name”), then From → To. */
-  function flowEl(c, targetId) {
-    const t = c.targets.find(x => x.id === targetId);
-    const to = stepStatus(c.step, RULES);
+  function flowEl(c, targetId, invalid = false) {
+    const t = invalid ? null : c.targets.find(x => x.id === targetId);
+    const to = invalid ? RULES.invalidStatuses[0] : stepStatus(c.step, RULES);
     const arrow = h("span", { class: "flow-arrow", "aria-label": "becomes" }, "→");
     if (!t) return [h("span", { class: "flow-step" }, "New Collections row", arrow, h("b", null, to))];
     const name = h("span", { class: "flow-row" }, `“${t.row.arName || "(no AR name)"}”`);
@@ -251,7 +255,7 @@ export function createInbox(ctx) {
   cancel.addEventListener("click", () => { if (!sheet || !sheet.busy) dialog.close(); });
   dialog.addEventListener("cancel", (e) => { if (sheet && sheet.busy) e.preventDefault(); });
   dialog.addEventListener("close", () => {
-    if (sheet && !sheet.done) S.drafts.set(draftKey(sheet.card), { choices: sheet.choices, clientToken: sheet.clientToken, targetId: sheet.targetId });
+    if (sheet && !sheet.done) S.drafts.set(draftKey(sheet.card) + (sheet.invalid ? ":invalid" : ""), { choices: sheet.choices, clientToken: sheet.clientToken, targetId: sheet.targetId });
     sheet = null;
   });
   $("#sheetForm").addEventListener("submit", (e) => e.preventDefault());   // Enter in a field mustn't send
@@ -266,21 +270,23 @@ export function createInbox(ctx) {
     return {};
   }
 
-  function openSheet(c) {
-    const draft = S.drafts.get(draftKey(c));
+  function openSheet(c, { invalid = false } = {}) {
+    const draft = S.drafts.get(draftKey(c) + (invalid ? ":invalid" : ""));
     sheet = {
       card: c,
       choices: draft ? { ...draft.choices } : defaults(c),
       clientToken: draft ? draft.clientToken : newClientToken(),
       targetId: (draft && draft.targetId) || (c.target && c.target.id) || null,
-      busy: false, done: false, blocked: "",
+      busy: false, done: false, blocked: "", invalid,
     };
+    sheet.choices.invalid = invalid;
     // A draft's row may have gone (the list was refreshed): fall back to the card's default.
     if (c.kind === "invoice" && sheet.choices.targetId !== "new" && !c.targets.some(t => t.id === sheet.choices.targetId)) {
       sheet.choices.targetId = c.target;
     }
     $("#sheetTitle").textContent = { brief: "Push to Universe", par: "Add PAR to Universe", invoice: "Add to Collections", andon: "Add to ANDON" }[c.kind];
-    $("#sheetSub").textContent = `${c.code}${(c.kind === "par" || c.kind === "invoice") && c.requestNo ? ` · request ${c.requestNo}` : ""} · ${c.name}`;
+    $("#sheetSub").replaceChildren(copyable(c.code, { label: "project code", empty: "No code" }),
+      (c.kind === "par" || c.kind === "invoice") && c.requestNo ? [" · request ", copyable(c.requestNo)] : "", ` · ${c.name}`);
     go.querySelector(".btn-label").textContent = { brief: "Push to Universe", par: "Add PAR", invoice: "Add to Collections", andon: "Add to ANDON" }[c.kind];
     $("#sheetError").hidden = true;
     const body = $("#sheetBody");
@@ -419,9 +425,9 @@ export function createInbox(ctx) {
     const refresh = () => {
       const row = c.targets.find(t => t.id === sheet.targetId) || c.target;
       const next = parAfterAdding(row.par, c.requestNo) || row.par;
-      ctxLine.textContent = `Goes into the Universe row "${row.project || row.codeText}" (${c.code}).`;
+      ctxLine.replaceChildren(...copyableText(`Goes into the Universe row "${row.project || row.codeText}" (${c.code}).`));
       written.replaceChildren(h("dt", null, "PAR"),
-        h("dd", null, next, h("span", { class: "why" }, row.par ? `Was ${row.par}. The new number is added after it.` : "Was empty.")));
+        h("dd", null, copyableText(next), h("span", { class: "why" }, row.par ? `Was ${row.par}. The new number is added after it.` : "Was empty.")));
     };
     sheet.refresh = refresh;
     if (c.targets.length > 1) {
@@ -431,14 +437,15 @@ export function createInbox(ctx) {
       sel.addEventListener("change", () => { sheet.targetId = sel.value; refresh(); });
       body.append(fieldEl(`Universe row (${c.targets.length} rows share ${c.code})`, false, h("label", { class: "select" }, sel), "sheetTarget"));
     }
-    put(body, ctxLine, c.notes.length ? h("p", { class: "note" }, `Note: ${c.notes.join(" ")}`) : null,
+    put(body, ctxLine, c.notes.length ? h("p", { class: "note" }, copyableText(`Note: ${c.notes.join(" ")}`)) : null,
                 h("p", { class: "subhead" }, "Will be written"), written);
     refresh();
   }
 
   /* --- invoice (a Collections change) --- */
   // The sheet's title and button, for what the chosen row goes through.
-  function verbs(c, action) {
+  function verbs(c, action, invalid) {
+    if (invalid) return ["Mark as Invalid in Collections", "Mark invalid"];
     if (action === "create") return ["Add to Collections", "Add to Collections"];
     if (action === "link") return ["Add the request number", "Add the number"];
     if (action === "reset") return ["Move back to For Invoicing", "Move back"];
@@ -458,13 +465,13 @@ export function createInbox(ctx) {
     const details = h("div", { class: "field" });
     const refresh = () => {
       const change = collectionsChange(c, ch, opts, RULES);
-      const [title, label] = verbs(c, change.action);
+      const [title, label] = verbs(c, change.action, ch.invalid);
       $("#sheetTitle").textContent = title;
       if (!sheet.busy) go.querySelector(".btn-label").textContent = label;
-      flow.replaceChildren(...flowEl(c, ch.targetId));
+      flow.replaceChildren(...flowEl(c, ch.targetId, ch.invalid));
       arField.hidden = change.mode !== "create";
       details.hidden = c.step !== "approved";
-      sheet.blocked = change.mode === "create" ? c.noNew : "";
+      sheet.blocked = change.mode === "create" && !ch.invalid ? c.noNew : "";
       blockNote.hidden = !sheet.blocked;
       blockNote.textContent = sheet.blocked;
       go.disabled = sheet.busy || !!sheet.blocked;
@@ -528,7 +535,7 @@ export function createInbox(ctx) {
       ch.showDetails = true; showDetails(); $("#sheetInvNo").focus(); } }, ic("plus"), "Add invoice details (number, SI, date, file)"));
 
     put(body, picker, flow, arField, blockNote,
-                c.notes.length ? h("p", { class: "note" }, `Note: ${c.notes.join(" ")}`) : null,
+                c.notes.length ? h("p", { class: "note" }, copyableText(`Note: ${c.notes.join(" ")}`)) : null,
                 details,
                 h("p", { class: "subhead" }, "Will be written"), written);
     refresh();
@@ -579,7 +586,7 @@ export function createInbox(ctx) {
         res = await pushCollections(ctx.call, ctx.tables, RULES, c, change, s.clientToken);
       }
       s.done = true;
-      S.drafts.delete(draftKey(c));
+      S.drafts.delete(draftKey(c) + (s.invalid ? ":invalid" : ""));
       S.working.delete(c.id);
       setBusy(false);
       dialog.close();
@@ -589,7 +596,7 @@ export function createInbox(ctx) {
       setBusy(false);
       if (err instanceof AlreadyDone) {
         s.done = true;
-        S.drafts.delete(draftKey(c));
+        S.drafts.delete(draftKey(c) + (s.invalid ? ":invalid" : ""));
         dialog.close();
         toast(err.message, { type: "warn", detail: err.detail || "Someone else already did this. The list has been refreshed." });
         ctx.loadData({ quiet: true });

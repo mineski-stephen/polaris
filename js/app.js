@@ -352,7 +352,7 @@ async function afterPush(c, res, payload, extra = {}) {
 function collectionsTitle(c, res, extra) {
   const to = stepStatus(c.step, RULES);
   const row = extra.rowName ? `“${extra.rowName}”` : "The row";
-  if (res.mode === "create") return `Added ${c.requestNo ? `request ${c.requestNo}` : c.code} to Collections as ${to}.`;
+  if (res.mode === "create") return `Added ${c.requestNo ? `request ${c.requestNo}` : c.code} to Collections as ${res.written["Status"] || to}.`;
   if (extra.action === "link") return `Added request ${c.requestNo} to ${row}.`;
   if (extra.action === "reset") return `${row} is back to ${to}.`;
   return `${row} is now ${to}.`;

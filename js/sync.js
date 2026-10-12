@@ -170,6 +170,9 @@ export function indexCollections(records) {
 
 const bySubmittedDesc = (a, b) => (b.submittedAt || 0) - (a.submittedAt || 0);
 
+/* Filed by one of the departments Polaris covers (Account Managers, once called Sales). */
+const inDepartment = (f, rules) => (rules.departments || [rules.department]).includes(clean(f["Initiator department"]));
+
 function emptyHidden() {
   return { otherDept: 0, ignored: 0, done: 0, void: 0, noProject: 0 };
 }
@@ -180,7 +183,7 @@ export function briefCards(briefs, uni, rules, { allDepartments = false, ignoreF
   const cards = [], hidden = emptyHidden();
   for (const r of briefs) {
     const f = r.fields || {};
-    if (!allDepartments && clean(f["Initiator department"]) !== rules.department) { hidden.otherDept++; continue; }
+    if (!allDepartments && !inDepartment(f, rules)) { hidden.otherDept++; continue; }
     if (f[ignoreField] === true) { hidden.ignored++; continue; }
     const code = normCode(plain(f["Project Code"]));
     if (code && uni.byCode.has(code)) { hidden.done++; continue; }
@@ -490,10 +493,6 @@ export function parAfterAdding(current, reqNo) {
      reset    a withdrawn request comes off its row
    `target` is the default (a row id, or "new" for a new row). */
 
-/* Whether Collections has a row for this project (rows marked Invalid don't count). */
-export const hasValidRow = (coll, code, rules) =>
-  (coll.byCode.get(code) || []).some(row => !(rules.invalidStatuses || []).includes(row.status));
-
 /* The Collections status a card's step leads to. */
 export function stepStatus(step, rules) {
   const st = rules.collectionStages;
@@ -526,7 +525,6 @@ export function collectionCards(invoices, uni, coll, pendingCodes, rules) {
                             && (!row.ir || voidNos.has(row.ir));
   const projects = (code) => uni.byCode.get(code) || [];
   const isClosed = (code) => projects(code).length > 0 && projects(code).every(u => rules.closedStatuses.includes(u.status));
-  const inCollections = (code) => hasValidRow(coll, code, rules);
 
   const withdrawn = [];   // added last: a replacement request may take the row instead
   const fresh = [];       // requests not in Collections yet, to be matched with free rows
@@ -559,7 +557,7 @@ export function collectionCards(invoices, uni, coll, pendingCodes, rules) {
       continue;
     }
 
-    if (clean(f["Initiator department"]) !== rules.department) { hidden.otherDept++; continue; }
+    if (!inDepartment(f, rules)) { hidden.otherDept++; continue; }
     if (f["IGNORE"] === true) { hidden.ignored++; continue; }
     if (isVoid) { hidden.void++; continue; }
 
@@ -661,7 +659,8 @@ export function collectionCards(invoices, uni, coll, pendingCodes, rules) {
   for (const u of uni.rows) {
     if (!rules.wonStatuses.includes(u.status) || !u.par) continue;
     const codes = [...new Set(allCodes(u.codeText))];
-    if (!codes.length || codes.some(c => inCollections(c) || busy.has(c) || seen.has(c))) continue;
+    // Any row counts, Invalid included: that's how a won project is kept out of Collections.
+    if (!codes.length || codes.some(c => coll.byCode.has(c) || busy.has(c) || seen.has(c))) continue;
     codes.forEach(c => seen.add(c));
     if (u.ignored) { hidden.ignored++; continue; }
     const code = codes[0];
@@ -682,15 +681,17 @@ export function collectionCards(invoices, uni, coll, pendingCodes, rules) {
   return { cards, hidden };
 }
 
-/* What pushing a Collections card writes. `choices` = { targetId, arName };
+/* What pushing a Collections card writes. `choices` = { targetId, arName, invalid }
+   (`invalid`: a new row marked Invalid, for a won project that shouldn't be billed);
    `options` = Collections' select options, so values never invent new ones.
    Returns { mode: "create" | "update", rowId, action, fields, before, expect }:
    `fields` in Lark's write format (null clears a cell), `before` the row's
    current values of those fields, `expect` what the row must still say when
    the push happens (else someone changed it meanwhile). */
 export function collectionsChange(card, choices, options, rules) {
-  const to = stepStatus(card.step, rules);
-  const t = card.targets.find(x => x.id === (choices.targetId || card.target)) || null;
+  const invalid = !!choices.invalid && card.step === "won";
+  const to = invalid ? rules.invalidStatuses[0] : stepStatus(card.step, rules);
+  const t = invalid ? null : card.targets.find(x => x.id === (choices.targetId || card.target)) || null;
   const currency = matchOption(card.currency, options["Currency"]);
   if (!t) {
     const out = { "AR Name": (choices.arName || "").trim() || card.name, "Project Code": card.code };

@@ -20,9 +20,10 @@ export const TABLE_LINKS = {
 };
 
 export const RULES = {
-  // Only briefs and invoice requests filed by this department become cards.
+  // Only briefs and invoice requests filed by these departments become cards
+  // ("Sales" is what Account Managers was called before Oct 2025).
   // ANDON takes briefs from every department.
-  department: "Account Managers",
+  departments: ["Account Managers", "Sales"],
 
   // Amount (VAT-Ex.) (PHP) = filed value × (usdRate if USD) ÷ (vatDivisor if 12% VAT).
   usdRate: 57,          // internal rate, not the BSP rate
@@ -44,7 +45,8 @@ export const RULES = {
     pending: "Pending Invoice Request Approval",
     forCollection: "For Collection",
   },
-  // Collections rows marked as void: Polaris never puts a request on them.
+  // Collections rows marked as void: Polaris never puts a request on them. The
+  // first is what "Mark invalid" writes, to keep a won project out of the list.
   invalidStatuses: ["Invalid"],
   // Universe statuses of a won project that's still being billed. These get a
   // For Invoicing row once they have a PAR and an amount.

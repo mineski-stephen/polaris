@@ -108,14 +108,26 @@ export async function copyText(text) {
   return ok;
 }
 
-/* A request number you can click to copy. */
-export function copyable(text) {
-  if (!text) return h("b", null, "?");
-  return h("button", { type: "button", class: "copy", title: "Copy request number", onclick: async (e) => {
-    e.stopPropagation();
-    const ok = await copyText(text);
-    toast(ok ? `Copied ${text}.` : `Couldn't copy. Select ${text} and copy it by hand.`, { type: ok ? "success" : "error", timeout: ok ? 2200 : 0 });
-  } }, text);
+/* An identifier (request number, project code, invoice or SI number) you can
+   click to copy. `cls` replaces the default dotted-underline look (e.g. "code"
+   keeps the code chip); `empty` is shown when there's nothing to copy. */
+export function copyable(text, { label = "request number", cls = "copy", empty } = {}) {
+  text = String(text || "").trim();
+  if (!text) return empty !== undefined ? empty : h("b", null, "?");
+  return h("button", { type: "button", class: `${cls} copyable`, title: `Copy ${label}`, "aria-label": `Copy ${label} ${text}`,
+    onclick: async (e) => {
+      e.stopPropagation();
+      const ok = await copyText(text);
+      toast(ok ? `Copied ${text}.` : `Couldn't copy. Select ${text} and copy it by hand.`, { type: ok ? "success" : "error", timeout: ok ? 2200 : 0 });
+    } }, text);
+}
+
+/* A sentence with every request number and project code in it made copyable,
+   e.g. "Its PAR 202608240082 is on 2026TEG-P0155" or a PAR cell "202607030034, 202610080029". */
+const ID_RE = /(\b\d{12}\b|\b\d{4}TEG-P\d{4,5}\b)/i;
+export function copyableText(text) {
+  return String(text || "").split(ID_RE).filter(Boolean).map(p => (!ID_RE.test(p) ? p
+    : copyable(p, { label: /TEG/i.test(p) ? "project code" : "request number" })));
 }
 
 /* A short-lived highlight on something that just arrived ("is-new" fades out in CSS). */

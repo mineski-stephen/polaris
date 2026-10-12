@@ -4,7 +4,7 @@
 
 import { UNIVERSE_VIEW } from "./config.js";
 import { universeView, universeRow } from "./sync.js";
-import { $, h, ic, fmt, flash, store, recall, toast, reduceMotion } from "./ui.js";
+import { $, h, ic, fmt, copyableText, flash, store, recall, toast, reduceMotion } from "./ui.js";
 import { describe } from "./net.js";
 
 const KEY = { sort: "polaris.uniSort", collapsed: "polaris.uniCollapsed" };
@@ -109,7 +109,7 @@ export function createUniverse(ctx) {
       cell("c-amount num", r.amount !== null ? fmt.peso(r.amount) : ""),
       who(r.bd, "BD", "c-people c-bd"),
       who(r.am, "AM", "c-people c-am"),
-      cell("c-code", r.code),
+      cell("c-code", r.code ? copyableText(r.code) : ""),
       cell("c-date", fmt.dayOnly(r.rfp)),
       h("td", { class: "brk b1", "aria-hidden": "true" }),
       h("td", { class: "brk b2", "aria-hidden": "true" }));

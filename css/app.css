@@ -584,8 +584,12 @@ main:focus { outline: none; }
 .uni td.c-act { width: 1%; white-space: nowrap; text-align: right; }
 .uni td.c-ar .sub-line { display: block; font-size: 12px; font-weight: 500; color: var(--muted); }
 .copy { font: inherit; font-weight: 700; color: inherit; background: none; border: 0; padding: 0 2px; border-radius: 6px;
-        cursor: copy; text-decoration: underline dotted; text-underline-offset: 3px; }
+        text-decoration: underline dotted; text-underline-offset: 3px; text-align: left; overflow-wrap: anywhere; }
+.copyable { cursor: pointer; }
 .copy:hover { color: var(--brand-text); }
+.uni .copy, .modal-sub .copy, .flow .copy { font-weight: inherit; }
+button.code { cursor: pointer; }
+button.code:hover { border-color: var(--brand-text); color: var(--brand-text); }
 .files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .files li { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; border: 1px solid var(--line); border-radius: 10px;
             font-size: 13.5px; background: var(--surface-2); }

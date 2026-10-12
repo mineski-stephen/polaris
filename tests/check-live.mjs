@@ -10,7 +10,7 @@
 import { RULES } from "../js/config.js";
 import { loadEverything, selectOptions, writableOnly } from "../js/ops.js";
 import {
-  indexUniverse, indexCollections, briefCards, parCards, collectionCards, collectionsChange, hasValidRow,
+  indexUniverse, indexCollections, briefCards, parCards, collectionCards, collectionsChange,
   universeFromBrief, defaultVat, normCode, andonFromBrief,
 } from "../js/sync.js";
 import { tenantToken, makeCall, tables } from "./lark-node.mjs";
@@ -102,7 +102,7 @@ for (const step of ["won", "filed", "approved", "withdrawn"]) {
     } else if (!c.blocked) {
       checkPayload(label, ch.fields, collOpts);
       if (c.requestNo && coll.byIr.has(c.requestNo)) fail(`${label}: a new row for a request already in Collections`);
-      if (c.step === "won" && hasValidRow(coll, c.code, RULES)) fail(`${label}: a won project already in Collections`);
+      if (c.step === "won" && coll.byCode.has(c.code)) fail(`${label}: a won project already in Collections`);
     }
     const t = c.targets.find(x => x.id === ch.rowId);
     const where = t ? `${ch.action} “${t.row.arName.slice(0, 34)}” (${t.row.status})` : "new row";
