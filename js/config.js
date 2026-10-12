@@ -10,9 +10,9 @@ export const ENV_LABEL = "Test copy";   // shown in the header; set to "" for pr
 export const TABLE_LINKS = {
   universe:    "https://mineskiglobal.larksuite.com/base/NP7TbjwHNaTyLOsWafelN9wNgEd?table=tblEmWYOXoAF70uf&view=vewFlJYfpR",
   collections: "https://mineskiglobal.larksuite.com/base/NP7TbjwHNaTyLOsWafelN9wNgEd?table=tbln7I51ONseeG55&view=vewZ7gtj5w",
-  brief:       "https://mineskiglobal.larksuite.com/base/DOoobrd5IaEIwjshAnuuuDFasjg?table=tbl56vIOXEoqDBV2&view=vewqnENgAr",
-  par:         "https://mineskiglobal.larksuite.com/base/DOoobrd5IaEIwjshAnuuuDFasjg?table=tbl7HyAEuiHa17Rl&view=vewKUWxTZV",
-  invoice:     "https://mineskiglobal.larksuite.com/base/DOoobrd5IaEIwjshAnuuuDFasjg?table=tblUWkLEMI5ybr8u&view=vew539msyS",
+  brief:       "https://mineskiglobal.larksuite.com/base/NP7TbjwHNaTyLOsWafelN9wNgEd?table=tblu5GcPn9RoCcev&view=vewL6Eydfw",
+  par:         "https://mineskiglobal.larksuite.com/base/NP7TbjwHNaTyLOsWafelN9wNgEd?table=tblFrfsaJZrLLpLQ&view=vewH1nekbn",
+  invoice:     "https://mineskiglobal.larksuite.com/base/NP7TbjwHNaTyLOsWafelN9wNgEd?table=tblnZyLzHXfzrzQt&view=vewO7Hk4IE",
   // ANDON (Project Management), test copy. Only users can open this Base (the
   // Lark app itself can't), so the Node checks skip it. Don't use the "ANDON 2026"
   // table in the base above: it's a synced, read-only mirror.
