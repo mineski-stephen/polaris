@@ -9,6 +9,7 @@ import {
   indexUniverse, indexCollections, briefCards, parCards, collectionCards, collectionsChange,
   universeFromBrief, verifyWritten, similarity, vatMentions,
   peoplePool, universeView, shortName, andonFromBrief, collectionsView, collectionRow, invoiceDetailsPatch,
+  auditCards, auditPatch,
 } from "../js/sync.js";
 import { writableOnly } from "../js/ops.js";
 
@@ -509,4 +510,69 @@ test("invoice details: only what changed is written; clearing sends null", () =>
     "Invoice Number": "INV-2", "SI Number": null, "Invoice Date": 1791302400000,
     "Invoice": [{ file_token: "t1" }, { file_token: "t2" }],
   });
+});
+
+/* ---------- the audit: blanks the brief can fill ---------- */
+
+test("audit: Universe blanks the brief can fill, never cells that have a value", () => {
+  const b = rec("recBA", {
+    "Request No.": url("202601050001"), "Project Code": seg("2026TEG-P0600"), "Project Name": seg("Audit Fest"),
+    "Initiator department": seg("Sales"), "Status": "Approved", "Submitted at": 1790000000000,
+    "Contract Value": 1120000, "Contract Value-Currency": "PHP", "Remarks": seg("Three-day event."),
+    "AM": [user("ou_am", "Ana Manager")], "MKT": [user("ou_mk", "Mika Market")],
+    "Start date": 1790100000000, "End date": 1790300000000,
+  });
+  const older = rec("recBO", { ...b.fields, "Remarks": seg("old"), "Submitted at": 1700000000000 });
+  const recalled = rec("recBR", { ...b.fields, "Status": "Recalled", "Submitted at": 1799000000000 });
+  const rows = [
+    rec("uX", { "Project Code": seg("2026TEG-P0600"), "Project": seg("Audit Fest (typed)"), "Status": "Signed CE",
+                "AM": [user("ou_other", "Someone Else")], "Year": seg("2026"), "Project Description": seg("  ") }),
+    rec("uY", { "Project Code": seg("2026TEG-P0601"), "Project": seg("No brief") }),
+  ];
+  const { cards, hidden } = auditCards("universe", rows, [older, b, recalled], RULES);
+  assert.equal(hidden.noBrief, 1);
+  assert.equal(cards.length, 1);
+  const c = cards[0];
+  assert.equal(c.brief.requestNo, "202601050001");             // newest brief that wasn't withdrawn
+  // Filled: blank cells only. Project, AM and Year have values; Client, BD, Status… are never audited.
+  assert.deepEqual(c.gaps, ["MKT", "Amount (VAT-Ex.) (PHP)", "Project Description", "Project Start", "Project End", "RFP Received Date"]);
+  assert.equal(c.needsVat, true);
+  const all = auditPatch(c, rows[0], { vat: "12%" }, RULES);
+  assert.equal(all["Amount (VAT-Ex.) (PHP)"], 1000000);
+  assert.equal(all["VAT%"], "12%");                              // written with the amount, since the row had none
+  assert.equal(all["Project Description"], "Three-day event.");
+  assert.deepEqual(all["MKT"], [{ id: "ou_mk" }]);
+  assert.ok(!("AM" in all) && !("Project" in all) && !("Year" in all) && !("Status" in all));
+  // Only the ticked ones; no VAT% without the amount.
+  assert.deepEqual(auditPatch(c, rows[0], { fields: ["Project End"], vat: "0%" }, RULES), { "Project End": 1790300000000 });
+  // Hidden on this device until another cell goes blank.
+  assert.equal(auditCards("universe", rows, [b], RULES, { hide: new Set([c.hideKey]) }).cards.length, 0);
+  assert.equal(auditCards("universe", [rec("uX", { ...rows[0].fields, "MKT": [] , "Project": null })], [b], RULES,
+    { hide: new Set([c.hideKey]) }).cards.length, 1);
+});
+
+test("audit: ANDON only gets typed columns, and the row's own VAT stays", () => {
+  const b = rec("recBB", { "Request No.": url("202601050002"), "Project Code": seg("2026TEG-P0602"), "Project Name": seg("Andon Audit"),
+    "Status": "Approved", "Submitted at": 1, "Business Unit": "PDEI - Event Service", "Start date": 5, "End date": 6,
+    "AM": [user("ou_am", "Ana")], "Contract Value": 100, "Contract Value-Currency": "PHP" });
+  const fields = [["Project", 1], ["Project Code", 1], ["AM", 11], ["Business Unit", 3], ["Event Start", 5], ["Event End", 5],
+                  ["MONTH", 20], ["PM (LEAD)", 11]].map(([field_name, type]) => ({ field_name, type }));
+  const row = rec("aZ", { "Project Code": seg("2026TEG-P0602"), "Project": seg("Andon Audit"), "Event Start": 5 });
+  const { cards } = auditCards("andon", [row], [b], RULES, { fields, options: { "Business Unit": ["PDEI-Event Service"] } });
+  assert.deepEqual(cards[0].gaps, ["AM", "Business Unit", "Event End"]);   // not MONTH (a formula), not PM (LEAD) (picked by a person)
+  // A Universe row with a VAT% keeps it: the amount uses it, VAT% isn't written.
+  const u = rec("uV", { "Project Code": seg("2026TEG-P0602"), "VAT%": "0%" });
+  const uc = auditCards("universe", [u], [b], RULES).cards[0];
+  assert.equal(uc.needsVat, false);
+  const p = auditPatch(uc, u, { vat: "12%" }, RULES);
+  assert.equal(p["Amount (VAT-Ex.) (PHP)"], 100);
+  assert.ok(!("VAT%" in p));
+});
+
+test("verifyWritten checks multi-select values (e.g. ANDON Tools) without crashing", () => {
+  assert.deepEqual(verifyWritten({ "Tools": ["None"] }, { "Tools": ["None"] }), []);
+  assert.deepEqual(verifyWritten({ "Tools": ["LED Wall", "Sound"] }, { "Tools": ["Sound", "LED Wall"] }), []);
+  assert.deepEqual(verifyWritten({ "Tools": ["None"] }, { "Tools": { type: 4, value: ["None"] } }), []);
+  assert.equal(verifyWritten({ "Tools": ["None"] }, { "Tools": ["Sound"] }).length, 1);
+  assert.equal(verifyWritten({ "Tools": ["None"] }, {}).length, 1);
 });

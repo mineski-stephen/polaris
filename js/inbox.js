@@ -2,15 +2,15 @@
    sheet (with the BD picker), and Ignore with Undo. */
 
 import { RULES } from "./config.js";
-import { TABLE_TITLES, pushBrief, pushPar, pushCollections, pushAndon, setIgnore, AlreadyDone, newClientToken, writableOnly } from "./ops.js";
+import { TABLE_TITLES, pushBrief, pushPar, pushCollections, pushAndon, setIgnore, AlreadyDone, newClientToken, writableOnly, fillGaps } from "./ops.js";
 import {
   universeFromBrief, collectionsChange, stepStatus, parAfterAdding, defaultVat, amountFormula, vatMentions,
-  vatExAmount, people, andonFromBrief,
+  vatExAmount, people, andonFromBrief, auditPatch,
 } from "./sync.js";
-import { $, h, ic, toast, fmt, flash, reduceMotion, copyable, copyableText } from "./ui.js";
+import { $, h, ic, toast, fmt, flash, reduceMotion, copyable, copyableText, store } from "./ui.js";
 import { describe, isDeadToken, conn, uploadToBase } from "./net.js";
 
-const NOUN = { brief: "briefs", par: "PARs", invoice: "invoices", andon: "briefs for ANDON" };
+const NOUN = { brief: "briefs", par: "PARs", invoice: "invoices", andon: "briefs for ANDON", audit: "projects with blanks" };
 const STAGE_ORDER = ["universe", "brief", "par", "invoice", "collections", "andon"];
 // The table each card comes from (ANDON cards are Project Briefs too; invoice
 // cards say which table they come from themselves: a won project is a Universe row).
@@ -89,7 +89,8 @@ export function createInbox(ctx) {
   function matches(c, q) {
     if (!q) return true;
     const am = c.am ? c.am.map(u => u.name).join(" ") : "";
-    return `${c.code} ${c.name} ${c.requestNo} ${c.status} ${am}`.toLowerCase().includes(q.toLowerCase().trim());
+    const extra = c.kind === "audit" ? `${c.target} ${c.gaps.join(" ")}` : "";
+    return `${c.code} ${c.name} ${c.requestNo} ${c.status} ${am} ${extra}`.toLowerCase().includes(q.toLowerCase().trim());
   }
 
   function renderCards() {
@@ -106,7 +107,8 @@ export function createInbox(ctx) {
       : { brief: "Every brief is in the Universe. Nice work!",
           par: "Every PAR is in the Universe. Nice work!",
           invoice: "Collections is up to date. Nice work!",
-          andon: "Every brief is in ANDON. Nice work!" }[S.tab];
+          andon: "Every brief is in ANDON. Nice work!",
+          audit: "Nothing in the Universe or ANDON is missing what its brief has. Nice work!" }[S.tab];
     hiddenNote.textContent = hiddenSummary(list.hidden);
     S.entering.clear();
     if (S.flashCard) {
@@ -121,13 +123,14 @@ export function createInbox(ctx) {
       done: { invoice: "already up to date in Collections", andon: "already in ANDON" }[S.tab] || "already in the Universe",
       ignored: "ignored", void: "rejected, recalled or cancelled",
       otherDept: "from other departments", noProject: "for projects not in the Universe",
-      closed: "for closed or lost projects",
+      closed: "for closed or lost projects", hiddenHere: "hidden on this device",
     };
     const parts = Object.keys(label).filter(k => hd[k] > 0).map(k => `${hd[k].toLocaleString()} ${label[k]}`);
     return parts.length ? `Not shown: ${parts.join(" · ")}.` : "";
   }
 
   function cardEl(c) {
+    if (c.kind === "audit") return auditCardEl(c);
     const writable = ctx.canWriteFor(c.kind);
     const notes = [];
     let meta;
@@ -261,12 +264,110 @@ export function createInbox(ctx) {
   $("#sheetForm").addEventListener("submit", (e) => e.preventDefault());   // Enter in a field mustn't send
   go.addEventListener("click", runPush);
 
+  /* ======================= the audit: blanks the brief can fill ======================= */
+  const AUDIT_WHERE = { universe: "Universe", andon: "ANDON" };
+  const auditRow = (c) => (S.data[c.target] || []).find(r => r.record_id === c.rowId) || { fields: {} };
+  const auditOpts = (c) => (c.target === "andon" ? { options: ctx.optionsOf("andon"), fields: ctx.fieldsOf("andon") } : {});
+  const AUDIT_DATES = new Set(["Project Start", "Project End", "RFP Received Date", "Event Start", "Event End"]);
+
+  /* A value the audit would write, as text (people by name, dates as days). */
+  function auditText(c, k, v) {
+    const names = new Map();
+    for (const f of ["AM", "MKT", "BD"]) people(c.brief.record.fields[f]).forEach(u => names.set(u.id, u.name));
+    if (Array.isArray(v)) return v.map(x => (x && x.id ? names.get(x.id) || x.id : String(x))).join(", ");
+    if (v && typeof v === "object") return v.text || v.link || "";
+    if (AUDIT_DATES.has(k)) return fmt.dayOnly(v);
+    if (k === "Amount (VAT-Ex.) (PHP)") return fmt.peso(v);
+    return String(v);
+  }
+
+  function auditCardEl(c) {
+    const writable = ctx.canWriteFor(`audit:${c.target}`);
+    return h("article", { class: "card item" + (S.working.has(c.id) ? " is-working" : "") + (S.entering.has(c.id) ? " is-entering" : ""),
+                          "data-id": c.id },
+      h("div", { class: "item-head" },
+        copyable(c.code, { label: "project code", cls: "code" }),
+        h("span", { class: "badge badge-info" }, AUDIT_WHERE[c.target]),
+        c.status ? h("span", { class: "item-date", style: "margin-left:0" }, c.status) : null,
+        h("span", { class: "item-date" }, c.submittedAt ? `Brief ${fmt.day(c.submittedAt)}` : "")),
+      h("h3", null, c.name || "(no name)"),
+      h("p", { class: "item-meta" }, h("b", null, `${c.gaps.length} blank`), ` in ${AUDIT_WHERE[c.target]} that the brief `,
+        copyable(c.requestNo), " can fill"),
+      h("ul", { class: "notes" }, h("li", { class: "flow" }, h("span", { class: "flow-row" }, "Missing"),
+        h("span", { class: "flow-step" }, c.gaps.join(" · ")))),
+      h("div", { class: "item-actions" },
+        h("button", { type: "button", class: "btn btn-ghost", title: "Hides this card on this device until another cell goes blank",
+          onclick: (e) => hideAudit(c, true, e.currentTarget) }, "Hide"),
+        h("button", { type: "button", class: "btn btn-tonal", disabled: !writable, onclick: () => openSheet(c) }, "Fill")));
+  }
+
+  /* Hide (or bring back) an audit card on this device: nothing is written to Lark. */
+  async function hideAudit(c, value, button) {
+    if (value && button) {
+      const el = button.closest(".item");
+      if (el && !reduceMotion()) { el.classList.add("is-leaving"); await new Promise(r => setTimeout(r, 160)); }
+    }
+    if (value) S.auditHide.add(c.hideKey); else { S.auditHide.delete(c.hideKey); S.entering.add(c.id); S.flashCard = c.id; }
+    store("local", "polaris.auditHidden", [...S.auditHide]);
+    ctx.recompute();
+    ctx.render();
+    if (value) toast(`Hid ${c.code} (${AUDIT_WHERE[c.target]}).`, { action: "Undo", onAction: () => hideAudit(c, false),
+      detail: "Only on this device. It comes back if another cell goes blank." });
+  }
+
+  function buildAudit(body, c) {
+    const ch = sheet.choices;
+    const row = auditRow(c);
+    const written = h("dl", { class: "written" });
+    const vatBox = h("div", { class: "field" });
+    const refresh = () => {
+      const patch = auditPatch(c, row, ch, RULES, auditOpts(c));
+      const n = Object.keys(patch).length;
+      sheet.blocked = n ? "" : "Pick at least one field to fill.";
+      go.disabled = sheet.busy || !!sheet.blocked;
+      if (!sheet.busy) go.querySelector(".btn-label").textContent = n ? `Fill ${n} field${n === 1 ? "" : "s"}` : "Fill";
+      vatBox.hidden = !(c.needsVat && ch.fields.includes("Amount (VAT-Ex.) (PHP)"));
+      written.replaceChildren(...Object.entries(patch).flatMap(([k, v]) => [h("dt", null, k),
+        h("dd", { class: String(v).length > 140 ? "is-long" : "" }, auditText(c, k, v), h("span", { class: "why" }, "Was blank."))]));
+    };
+    sheet.refresh = refresh;
+    const want = auditPatch(c, row, { fields: c.gaps, vat: ch.vat }, RULES, auditOpts(c));
+    const boxes = h("div", { class: "checks" }, c.gaps.map((k) => {
+      const box = h("input", { type: "checkbox", id: `gap-${k}` });
+      box.checked = ch.fields.includes(k);
+      box.addEventListener("change", () => {
+        ch.fields = box.checked ? [...ch.fields, k] : ch.fields.filter(x => x !== k);
+        refresh();
+      });
+      const text = k in want ? auditText(c, k, want[k]) : "";
+      return h("label", { class: "check", for: `gap-${k}` }, box,
+        h("span", null, h("b", null, k), h("small", null, text.length > 90 ? text.slice(0, 90) + "…" : text)));
+    }));
+    if (c.needsVat) {
+      const seg = h("div", { class: "seg", role: "radiogroup", "aria-label": "VAT" },
+        ["12%", "0%"].map(v => h("button", { type: "button", role: "radio", "aria-checked": String(ch.vat === v), onclick: (e) => {
+          ch.vat = v;
+          for (const b of e.currentTarget.parentElement.children) b.setAttribute("aria-checked", String(b.textContent === v));
+          refresh();
+        } }, v)));
+      vatBox.replaceChildren(h("span", { class: "label" }, "VAT"), seg,
+        h("p", { class: "set-sub" }, "The row has no VAT%, so the amount needs one. It's written to VAT% too."));
+    }
+    put(body,
+      h("p", { class: "set-sub" }, copyableText(`Blank in the ${AUDIT_WHERE[c.target]} row, filled from brief ${c.requestNo}. ` +
+        "Cells that have a value are never changed.")),
+      h("p", { class: "subhead" }, "Fill"), boxes, vatBox,
+      h("p", { class: "subhead" }, "Will be written"), written);
+    refresh();
+  }
+
   function defaults(c) {
     if (c.kind === "brief") return { vat: defaultVat(c.currency), client: "", bd: [], otherLinks: "", showLinks: false };
     if (c.kind === "invoice") {
       return { targetId: c.target, arName: c.name, invoiceNo: "", siNo: "", invoiceDate: "", files: [], showDetails: false };
     }
     if (c.kind === "andon") return { pm: [], tribe: "" };
+    if (c.kind === "audit") return { fields: [...c.gaps], vat: defaultVat(c.brief.currency) };
     return {};
   }
 
@@ -284,16 +385,18 @@ export function createInbox(ctx) {
     if (c.kind === "invoice" && sheet.choices.targetId !== "new" && !c.targets.some(t => t.id === sheet.choices.targetId)) {
       sheet.choices.targetId = c.target;
     }
-    $("#sheetTitle").textContent = { brief: "Push to Universe", par: "Add PAR to Universe", invoice: "Add to Collections", andon: "Add to ANDON" }[c.kind];
+    $("#sheetTitle").textContent = { brief: "Push to Universe", par: "Add PAR to Universe", invoice: "Add to Collections", andon: "Add to ANDON",
+                                     audit: `Fill blanks in ${c.target === "andon" ? "ANDON" : "the Universe"}` }[c.kind];
     $("#sheetSub").replaceChildren(copyable(c.code, { label: "project code", empty: "No code" }),
       (c.kind === "par" || c.kind === "invoice") && c.requestNo ? [" · request ", copyable(c.requestNo)] : "", ` · ${c.name}`);
-    go.querySelector(".btn-label").textContent = { brief: "Push to Universe", par: "Add PAR", invoice: "Add to Collections", andon: "Add to ANDON" }[c.kind];
+    go.querySelector(".btn-label").textContent = { brief: "Push to Universe", par: "Add PAR", invoice: "Add to Collections", andon: "Add to ANDON", audit: "Fill" }[c.kind];
     $("#sheetError").hidden = true;
     const body = $("#sheetBody");
     body.replaceChildren();
     if (c.kind === "brief") buildBrief(body, c);
     else if (c.kind === "par") buildPar(body, c);
     else if (c.kind === "andon") buildAndon(body, c);
+    else if (c.kind === "audit") buildAudit(body, c);
     else buildInvoice(body, c);
     setBusy(false);
     dialog.showModal();
@@ -577,6 +680,9 @@ export function createInbox(ctx) {
         res = await pushAndon(ctx.call, ctx.tables, RULES, c, payload, s.clientToken);
       } else if (c.kind === "par") {
         res = await pushPar(ctx.call, ctx.tables, RULES, c, s.targetId);
+      } else if (c.kind === "audit") {
+        payload = auditPatch(c, auditRow(c), s.choices, RULES, auditOpts(c));
+        res = await fillGaps(ctx.call, ctx.tables[c.target], c.rowId, payload);
       } else {
         const change = collectionsChange(c, s.choices, ctx.collectionOptions(), RULES);
         if (c.step === "approved") Object.assign(change.fields, await invoiceDetails(s.choices));

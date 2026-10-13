@@ -411,6 +411,116 @@ export function pmPool(andon, universe) {
   return [...pool.values()].sort((a, b) => b.bdCount - a.bdCount || a.name.localeCompare(b.name));
 }
 
+/* ======================= the audit: blanks a brief can fill =======================
+
+   Universe and ANDON rows are compared with their Project Brief (matched by
+   project code). A cell that's blank in the row but has a value from the brief
+   is a gap; pushing fills the chosen gaps and never touches a cell that has a
+   value. Columns a person decides (Client, BD, Other Links, Status, Mancom Phase,
+   PM, TRIBE…) are never audited. */
+
+/* Blank as Lark shows it: no value, empty text, an empty list. Zero isn't blank. */
+export function isBlank(v) {
+  if (v === null || v === undefined) return true;
+  if (typeof v === "string") return !v.trim();
+  if (Array.isArray(v)) return !v.length || plain(v).trim() === "";
+  if (typeof v === "object" && "value" in v) return isBlank(v.value);
+  if (typeof v === "object" && "link" in v) return !v.link;
+  return false;
+}
+
+/* The brief of each project code: the newest one that wasn't rejected or withdrawn. */
+export function briefsByCode(briefs, rules) {
+  const out = new Map();
+  for (const b of briefs) {
+    const f = b.fields || {};
+    const code = normCode(plain(f["Project Code"]));
+    if (!code || rules.voidStatuses.includes(clean(f["Status"]))) continue;
+    const cur = out.get(code);
+    if (!cur || (num(f["Submitted at"]) || 0) > (num(cur.fields["Submitted at"]) || 0)) out.set(code, b);
+  }
+  return out;
+}
+
+/* A brief in the shape universeFromBrief / andonFromBrief take. */
+export function briefAsCard(b) {
+  const f = b.fields || {};
+  return {
+    record: b, code: normCode(plain(f["Project Code"])), name: clean(f["Project Name"]),
+    status: clean(f["Status"]), requestNo: requestNo(f["Request No."]),
+    submittedAt: num(f["Submitted at"]), value: num(f["Contract Value"]), currency: clean(f["Contract Value-Currency"]),
+  };
+}
+
+// Never audited: chosen by a person, or the key itself.
+const AUDIT_SKIP = {
+  universe: new Set(["Project Code", "Client", "BD", "Other Links", "Status", "Mancom Phase", "VAT%"]),
+  andon: new Set(["Project Code", "PM (LEAD)", "TRIBE"]),
+};
+
+/* What the brief would put in each column of this row. For the Universe the
+   amount uses the row's own VAT% (or `vat` when the row has none). */
+function fromBrief(target, brief, row, rules, { vat, options, fields } = {}) {
+  if (target === "universe") {
+    const rowVat = clean((row.fields || {})["VAT%"]);
+    return universeFromBrief(brief, { vat: rowVat || vat || defaultVat(brief.currency), client: "", bd: [], otherLinks: "" }, rules);
+  }
+  const all = andonFromBrief(brief, {}, rules, options || {});
+  if (!fields) return all;
+  const ok = new Map(fields.map(f => [f.field_name, f]));
+  return Object.fromEntries(Object.entries(all).filter(([k]) => ok.has(k) && !AUDIT_COMPUTED.has(ok.get(k).type)));
+}
+const AUDIT_COMPUTED = new Set([18, 19, 20, 21, 24, 1001, 1002, 1003, 1004, 1005]);
+
+/* Every row in `records` (Universe or ANDON, `target`) with gaps its brief can
+   fill. `hide` = keys of cards hidden on this device. `options`/`fields` = ANDON's
+   select options and columns (only typed columns are ever written).
+   Returns { cards, hidden: { noBrief, hidden } }. */
+export function auditCards(target, records, briefs, rules, { hide = new Set(), options, fields, byCode } = {}) {
+  const briefFor = byCode || briefsByCode(briefs, rules);
+  const cards = [], hidden = { noBrief: 0, hidden: 0 };
+  const seen = new Set();
+  for (const row of records) {
+    const f = row.fields || {};
+    const code = normCode(plain(f["Project Code"]));
+    if (!code) continue;
+    const b = briefFor.get(code);
+    if (!b) { hidden.noBrief++; continue; }
+    const brief = briefAsCard(b);
+    const want = fromBrief(target, brief, row, rules, { options, fields });
+    const gaps = Object.keys(want).filter(k => !AUDIT_SKIP[target].has(k) && isBlank(f[k]));
+    if (!gaps.length) continue;
+    const id = `${target}:${row.record_id}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const card = {
+      kind: "audit", target, id, rowId: row.record_id, code,
+      name: clean(f["Project"]) || brief.name, status: target === "universe" ? clean(f["Status"]) : "",
+      submittedAt: brief.submittedAt, requestNo: brief.requestNo, brief, gaps,
+      // The amount needs a VAT rate; the row has none, so the sheet asks for it.
+      needsVat: target === "universe" && gaps.includes("Amount (VAT-Ex.) (PHP)") && !clean(f["VAT%"]),
+      notes: [], blocked: "",
+    };
+    card.hideKey = `${id}|${gaps.join(",")}`;
+    if (hide.has(card.hideKey)) { hidden.hidden++; continue; }
+    cards.push(card);
+  }
+  cards.sort(bySubmittedDesc);
+  return { cards, hidden };
+}
+
+/* The cells a push writes: the chosen gaps (`choices.fields`, default all),
+   valued from the brief. `choices.vat` = the VAT rate when the row has none
+   (then VAT% is written with the amount). */
+export function auditPatch(card, row, choices, rules, { options, fields } = {}) {
+  const want = fromBrief(card.target, card.brief, row, rules, { vat: choices.vat, options, fields });
+  const pick = choices.fields || card.gaps;
+  const out = {};
+  for (const k of pick) if (card.gaps.includes(k) && k in want) out[k] = want[k];
+  if (card.needsVat && "Amount (VAT-Ex.) (PHP)" in out) out["VAT%"] = choices.vat || defaultVat(card.brief.currency);
+  return out;
+}
+
 /* ======================= the Universe view ======================= */
 
 /* One Universe record as a table row. */
@@ -739,8 +849,14 @@ export function verifyWritten(expected, actualFields) {
 
 function sameValue(want, got) {
   if (want === null) return got === null || got === undefined || got === "" || (Array.isArray(got) && !got.length);
-  if (Array.isArray(want) && want.every(x => x && "file_token" in x)) {   // attachments: compare tokens
-    const toks = (a) => (Array.isArray(a) ? a : []).map(x => x && x.file_token).filter(Boolean).sort().join(",");
+  const isObj = (x) => x !== null && typeof x === "object";
+  if (Array.isArray(want) && want.every(x => typeof x === "string")) {   // multi-select: compare the option names
+    const names = (a) => (Array.isArray(a) ? a : isObj(a) && Array.isArray(a.value) ? a.value : [])
+      .map(x => (typeof x === "string" ? x : plain(x))).filter(Boolean).sort().join("\n");
+    return names(want) === names(got);
+  }
+  if (Array.isArray(want) && want.every(x => isObj(x) && "file_token" in x)) {   // attachments: compare tokens
+    const toks = (a) => (Array.isArray(a) ? a : []).map(x => isObj(x) && x.file_token).filter(Boolean).sort().join(",");
     return toks(want) === toks(got);
   }
   if (Array.isArray(want)) {                                    // people: compare ids

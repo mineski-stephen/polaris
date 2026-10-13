@@ -7,7 +7,7 @@
    exactly the same push logic. */
 
 import {
-  indexUniverse, indexCollections, verifyWritten, parAfterAdding, clean,
+  indexUniverse, indexCollections, verifyWritten, parAfterAdding, clean, isBlank,
 } from "./sync.js";
 
 export const OPEN_API = "https://open.larksuite.com/open-apis";
@@ -48,7 +48,9 @@ export function schemaSpec(rules) {
       // Everything the cards and the Universe view need; `index` is the lean set
       // re-read just before a push to rule out duplicates.
       read: ["Project Code", "Project", "Client", "PAR", "Amount (VAT-Ex.) (PHP)", "BD", "AM",
-             "RFP Received Date", "Status", "Year", "Amount (VAT-Inc.)", "Business Unit", rules.universeIgnoreField],
+             "RFP Received Date", "Status", "Year", "Amount (VAT-Inc.)", "Business Unit", rules.universeIgnoreField,
+             // …and what the audit compares with the brief
+             "MKT", "VAT%", "Project Description", "Project Start", "Project End"],
       index: ["Project Code", "Project", "Client", "PAR"],
       fields: {
         "Client": T.text, "Project": T.text, "Project Code": T.text, "PAR": T.text,
@@ -97,7 +99,7 @@ export function schemaSpec(rules) {
     andon: {
       // What a person types into an ANDON row. ANDON fills the rest (Brief, Brief Status,
       // amounts, YEAR, MONTH…) itself from the Project Code and dates.
-      read: ["Project Code", "Project", "PM (LEAD)", "PM (SUPP)"],
+      read: "*",   // every column: the audit compares the row with its brief
       index: ["Project Code", "Project"],
       fields: {
         "Project": T.text, "Project Code": T.text, "AM": T.user, "PM (LEAD)": T.user, "MKT (PITCH)": T.user,
@@ -214,8 +216,10 @@ export async function loadEverything(call, tables, rules, onProgress) {
       kindProblems[kind] = [...(kindProblems[kind] || []), ...list];
     }
     const present = new Set(fields[k].map(f => f.field_name));
-    const want = [...new Set(spec[k].read || [...Object.keys(spec[k].fields), ...Object.keys(spec[k].optional || {})])]
-      .filter(n => present.has(n));
+    // read "*": every column (no field list; Lark caps that list at 50 names).
+    const want = spec[k].read === "*" ? undefined
+      : [...new Set(spec[k].read || [...Object.keys(spec[k].fields), ...Object.keys(spec[k].optional || {})])]
+        .filter(n => present.has(n));
     data[k] = await loadRecords(call, tables[k], want, (n, total) => onProgress && onProgress(k, n, total));
   }));
   // `problems`: every table; `tableProblems`: by table, so a broken ANDON only stops ANDON
@@ -271,7 +275,9 @@ const universeIndex = async (call, tables, rules) =>
 
 /* The Universe again, fresh from Lark, with every column the page shows. */
 export async function loadUniverse(call, tables, rules) {
-  return loadRecords(call, tables.universe, schemaSpec(rules).universe.read);
+  // Only columns the table has: Lark refuses a field list naming a missing one (e.g. the optional IGNORE).
+  const present = new Set((await loadFields(call, tables.universe)).map(f => f.field_name));
+  return loadRecords(call, tables.universe, schemaSpec(rules).universe.read.filter(n => present.has(n)));
 }
 
 /* After a write has succeeded: read the record back and compare. A failed read
@@ -368,6 +374,20 @@ export async function loadCollections(call, tables, rules) {
 export async function saveInvoiceDetails(call, tables, recordId, patch) {
   await updateRecord(call, tables.collections, recordId, patch);
   return { recordId, written: patch, ...await readBack(call, tables.collections, recordId, patch) };
+}
+
+/* Fill blank cells of a Universe or ANDON row (the audit). The row is re-read
+   first: a cell someone filled meanwhile is left alone (`skipped`), and if
+   nothing is still blank nothing is written. Then it writes, reads back and compares. */
+export async function fillGaps(call, t, recordId, patch) {
+  const now = await getRecord(call, t, recordId);
+  const written = Object.fromEntries(Object.entries(patch).filter(([k]) => k === "VAT%" || isBlank((now.fields || {})[k])));
+  const skipped = Object.keys(patch).filter(k => !(k in written));
+  if (!Object.keys(written).some(k => k !== "VAT%")) {
+    throw new AlreadyDone("Those cells aren't blank anymore.", "Someone filled them meanwhile. Nothing was written; the list has been refreshed.");
+  }
+  await updateRecord(call, t, recordId, written);
+  return { recordId, written, skipped, ...await readBack(call, t, recordId, written) };
 }
 
 /* Tick (or untick) a source row's IGNORE box, then confirm it stuck. */

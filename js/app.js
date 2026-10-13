@@ -4,7 +4,7 @@
 
 import { ENV_LABEL, TABLE_LINKS, RULES } from "./config.js";
 import { parseBaseLink, loadEverything, loadUniverse, selectOptions, TABLE_TITLES, computedTypes } from "./ops.js";
-import { indexUniverse, indexCollections, briefCards, parCards, collectionCards, stepStatus, peoplePool, pmPool } from "./sync.js";
+import { indexUniverse, indexCollections, briefCards, parCards, collectionCards, stepStatus, peoplePool, pmPool, auditCards, briefsByCode } from "./sync.js";
 import { $, $$, h, ic, toast, fmt, store, recall, sleep } from "./ui.js";
 import { ICONS } from "./icons.js";
 import {
@@ -24,7 +24,7 @@ const LOW_SESSION_MS = 10 * 60 * 1000;
 /* ======================= state ======================= */
 const S = {
   view: "login",            // login | busy | work | settings
-  tab: ["brief", "par", "invoice", "andon"].includes(recall("local", KEY.tab)) ? recall("local", KEY.tab) : "brief",
+  tab: ["brief", "par", "invoice", "andon", "audit"].includes(recall("local", KEY.tab)) ? recall("local", KEY.tab) : "brief",
   show: "inbox",            // on narrow screens: inbox | universe
   data: null,               // { universe, collections, brief, par, invoice }: records as read
   fields: null,
@@ -40,7 +40,8 @@ const S = {
   entering: new Set(),      // cards that just came back (Undo): animate once
   flashCard: null,          // a card to highlight where it lands
   drafts: new Map(),        // what was typed in a push sheet, kept if it's cancelled
-  query: { brief: "", par: "", invoice: "", andon: "" },
+  query: { brief: "", par: "", invoice: "", andon: "", audit: "" },
+  auditHide: new Set(recall("local", "polaris.auditHidden") || []),   // audit cards hidden on this device
 };
 
 /* Every Lark call runs as the signed-in user. Reads retry while the proxy wakes. */
@@ -57,6 +58,8 @@ const field = (table, name) => ((S.fields && S.fields[table]) || []).find(f => f
 const TABLES_FOR = {
   brief: ["brief", "universe"], par: ["par", "brief", "universe"],
   invoice: ["invoice", "collections", "universe"], andon: ["brief", "andon"],
+  // The audit fills Universe or ANDON cells from the brief: each card checks its own table.
+  audit: ["brief", "universe"], "audit:universe": ["brief", "universe"], "audit:andon": ["brief", "andon"],
 };
 const problemsFor = (kind) => [...(TABLES_FOR[kind] || []).flatMap(t => S.tableProblems[t] || []),
                                 ...(S.kindProblems[kind] || [])];
@@ -91,7 +94,7 @@ const universe = createUniverse(ctx);
 const collections = createCollections(ctx);
 
 /* ======================= routes ======================= */
-const ROUTES = { "": "brief", briefs: "brief", pars: "par", invoices: "invoice", andon: "andon", universe: "universe", collections: "collections", settings: "settings" };
+const ROUTES = { "": "brief", briefs: "brief", pars: "par", invoices: "invoice", andon: "andon", audit: "audit", universe: "universe", collections: "collections", settings: "settings" };
 const parseRoute = () => ROUTES[(location.hash.match(/^#\/?([a-z]*)/) || [])[1] || ""] || "brief";
 
 function onRoute() {
@@ -274,6 +277,15 @@ function recompute() {
       { allDepartments: true, kind: "andon" });   // the same IGNORE box as the Universe
     S.pmPool = pmPool(d.andon, d.universe);
   }
+  // The audit: Universe and ANDON cells left blank that the brief can fill.
+  const byCode = briefsByCode(d.brief, RULES);
+  const uniAudit = auditCards("universe", d.universe, d.brief, RULES, { hide: S.auditHide, byCode });
+  const andonAudit = d.andon ? auditCards("andon", d.andon, d.brief, RULES,
+    { hide: S.auditHide, byCode, options: ctx.optionsOf("andon"), fields: fieldsOf("andon") }) : { cards: [], hidden: { noBrief: 0, hidden: 0 } };
+  S.lists.audit = {
+    cards: [...uniAudit.cards, ...andonAudit.cards].sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0)),
+    hidden: { hiddenHere: uniAudit.hidden.hidden + andonAudit.hidden.hidden },
+  };
   S.pool = peoplePool(d.universe, d.brief);
   S.clients = [...new Set(uni.rows.map(r => r.client).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   S.statusOrder = selectOptions(field("universe", "Status"));
@@ -297,6 +309,7 @@ async function refreshUniverse() {
    confirmed, then re-read the Universe and highlight where the push landed. */
 async function afterPush(c, res, payload, extra = {}) {
   const d = S.data;
+  if (c.kind === "audit") return afterFill(c, res);
   if (c.kind === "brief") {
     d.universe.push({ record_id: res.recordId, fields: {
       "Project Code": payload["Project Code"], "Project": payload["Project"], "Client": payload["Client"] || "",
@@ -342,6 +355,30 @@ async function afterPush(c, res, payload, extra = {}) {
   }
   if (dest === "collections") await collections.refresh(res.recordId);
   if (dest === "universe") {
+    universe.highlight(res.recordId);
+    await refreshUniverse();
+    render();
+  }
+}
+
+/* After the audit filled a row's blanks: update the local copy (the card goes),
+   say what Lark confirmed, then re-read the table so the view shows what's there. */
+async function afterFill(c, res) {
+  const t = c.target, rec = (S.data[t] || []).find(r => r.record_id === res.recordId);
+  if (rec) Object.assign(rec.fields, res.written);
+  recompute();
+  render();
+  const n = Object.keys(res.written).length;
+  const where = t === "andon" ? "ANDON" : "the Universe";
+  const title = `Filled ${n} missing field${n === 1 ? "" : "s"} on ${c.code} in ${where}.`;
+  const skipped = res.skipped.length ? ` Someone had already filled ${res.skipped.join(", ")}, so those were left as they were.` : "";
+  if (res.readBackError || res.mismatches.length) {
+    const list = res.mismatches ? res.mismatches.map(m => `${m.field}: sent "${m.want}", Lark has "${m.got}"`).join("; ") : describe(res.readBackError);
+    toast(title, { type: "warn", timeout: 0, detail: `Check these in Lark: ${list}.${skipped}`, link: { href: tables[t].url, text: "Open in Lark" } });
+  } else {
+    toast(title, { type: "success", detail: `All ${n} checked in Lark.${skipped}` });
+  }
+  if (t === "universe") {
     universe.highlight(res.recordId);
     await refreshUniverse();
     render();

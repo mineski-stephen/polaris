@@ -24,6 +24,7 @@ phone and on a PC, and every change is made as you, with your own Lark login.
 - [Using Polaris](#using-polaris)
 - [What shows up as a card](#what-shows-up-as-a-card)
 - [What gets written](#what-gets-written)
+- [The audit](#the-audit)
 - [The Universe view](#the-universe-view)
 - [Safety checks](#safety-checks)
 - [Running it on your computer](#running-it-on-your-computer)
@@ -206,6 +207,26 @@ lookups in Collections and fill themselves from the Universe through the Project
 Code. Select values are only ever written with an option that already exists.
 
 All rules are in [`js/config.js`](js/config.js) and [`js/sync.js`](js/sync.js).
+
+---
+
+## The audit
+
+The **Audit** tab checks every Universe and ANDON row against its Project Brief
+(matched by project code; the newest brief that wasn't rejected or withdrawn) and
+lists each row that has **blank cells the brief can fill**: AM, MKT, the amount,
+Project Description, start and end dates, RFP Received Date and Year for the
+Universe; the typed ANDON columns (AM, MKT (PITCH), Business Unit, Tools, Event
+Start / End…) for ANDON.
+
+- **Fill** shows each blank with the brief's value; untick any you'd rather leave.
+  If the amount is blank and the row has no VAT%, pick the VAT (it's written to VAT% too).
+- Only blank cells are ever written. The row is re-read just before writing: a
+  cell someone filled meanwhile is left alone, then everything written is read back.
+- Never audited: what a person decides (Client, BD, Other Links, Status, Mancom
+  Phase, VAT% on its own, PM (LEAD), TRIBE) and what Lark computes (lookups, formulas).
+- **Hide** removes a card **on this device only** (nothing is written to Lark).
+  It comes back if another cell of that row goes blank.
 
 ---
 
