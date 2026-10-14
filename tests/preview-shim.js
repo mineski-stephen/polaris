@@ -107,9 +107,9 @@
 
   document.addEventListener("DOMContentLoaded", function () {
     var b = document.createElement("div");
+    b.className = "override-badge";   // the top bar's red "Proxy override" badge (theme tokens), pinned bottom-left
     b.textContent = "Preview mode: snapshot data, nothing is sent to Lark";
-    b.style.cssText = "position:fixed;left:12px;bottom:12px;z-index:200;padding:6px 12px;border-radius:999px;" +
-      "background:#B42318;color:#fff;font:700 12px/1.4 sans-serif;box-shadow:0 6px 20px rgba(0,0,0,.25);pointer-events:none";
+    b.style.cssText = "position:fixed;left:12px;bottom:12px;z-index:200;box-shadow:var(--shadow-md);pointer-events:none";
     document.body.appendChild(b);
   });
 })();

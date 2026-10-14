@@ -19,17 +19,19 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap">
   <!-- Apply the saved theme (Settings > Appearance) before anything paints. -->
-  <script>try { var t = localStorage.getItem("polaris.theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}</script>
-  <!-- Every load fetches the stylesheet and every script module under a fresh URL,
+  <script>try { var t = JSON.parse(localStorage.getItem("polaris.theme")); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}</script>
+  <!-- Every load fetches the stylesheets and every script module under a fresh URL,
        so a stale cached copy is never used. The import map gives each module's
        imports the same fresh URL. -->
   <script>
     (function () {
       var v = window.POLARIS_BUILD = Date.now().toString(36);
-      var files = ["js/config.js", "js/sync.js", "js/ops.js", "js/icons.js", "js/ui.js", "js/net.js",
-                   "js/auth.js", "js/inbox.js", "js/universe.js", "js/collections.js", "js/app.js"];
+      var files = ["js/config.js", "js/sync.js", "js/ops.js", "js/icons.js", "js/ui.js", "js/polaris-ui.js",
+                   "js/net.js", "js/auth.js", "js/inbox.js", "js/universe.js", "js/collections.js", "js/app.js"];
       var map = { imports: {} };
       files.forEach(function (f) { map.imports[new URL(f, location.href).href] = new URL(f + "?v=" + v, location.href).href; });
+      document.write('<link rel="stylesheet" href="css/theme.css?v=' + v + '">');
+      document.write('<link rel="stylesheet" href="css/mineski-base.css?v=' + v + '">');
       document.write('<link rel="stylesheet" href="css/app.css?v=' + v + '">');
       document.write('<script type="importmap">' + JSON.stringify(map) + '<\/script>');
       // Developers only: ?preview on localhost runs on a snapshot, with Lark simulated (tests/preview-shim.js).
@@ -65,7 +67,7 @@
   </header>
 
   <main id="main" tabindex="-1">
-    <div class="block-note" id="blockNote" role="alert" hidden>
+    <div class="banner callout callout-err" id="blockNote" role="alert" hidden>
       <span class="i" data-icon="alert" aria-hidden="true"></span>
       <div>
         <p><b>Polaris can't reach its connection service.</b> An ad blocker or privacy extension is probably blocking it.</p>
@@ -75,12 +77,12 @@
     </div>
 
     <!-- Logged out ------------------------------------------------------------>
-    <section class="view view-login" data-view="login" hidden>
+    <section class="view view-login" data-view="login">
       <div class="login-card">
         <img class="login-mark" src="img/polaris-icon.svg" alt="" width="88" height="88">
         <h1>Polaris</h1>
         <p class="lede">Push new briefs, PARs and invoices into the Universe.</p>
-        <button type="button" class="btn btn-primary btn-lg" id="loginBtn">Log in with Lark</button>
+        <button type="button" class="btn btn-primary btn-lg" id="loginBtn"><span class="label">Log in with Lark</span></button>
         <p class="hint">You'll stay logged in for about 2 hours.</p>
         <div class="callout callout-warn" id="loginMsg" role="status" hidden></div>
         <div class="callout callout-err" id="redirectMsg" hidden></div>
@@ -88,52 +90,52 @@
     </section>
 
     <!-- Finishing a login -------------------------------------------------------->
-    <section class="view view-busy" data-view="busy" hidden>
+    <section class="view view-busy" data-view="busy">
       <span class="spinner" aria-hidden="true"></span>
       <p>Logging you in…</p>
     </section>
 
     <!-- Inbox + Universe ------------------------------------------------------->
-    <section class="view workspace" data-view="work" id="workspace" hidden>
-      <nav class="tabs" role="tablist" aria-label="Views">
-        <a class="tab" role="tab" href="#/briefs" data-tab="brief">Briefs <span class="count" data-count="brief"></span></a>
-        <a class="tab" role="tab" href="#/pars" data-tab="par">PARs <span class="count" data-count="par"></span></a>
-        <a class="tab" role="tab" href="#/invoices" data-tab="invoice">Invoices <span class="count" data-count="invoice"></span></a>
-        <a class="tab" role="tab" href="#/andon" data-tab="andon">ANDON <span class="count" data-count="andon"></span></a>
-        <a class="tab" role="tab" href="#/audit" data-tab="audit" title="Universe and ANDON cells left blank that the Project Brief can fill">Audit <span class="count" data-count="audit"></span></a>
-        <a class="tab tab-universe" role="tab" href="#/universe" data-tab="universe" id="sideTab">Universe</a>
+    <section class="view workspace" data-view="work" id="workspace">
+      <nav class="tabs" aria-label="Views">
+        <a class="tab" href="#/briefs" data-tab="brief">Briefs <span class="count" data-count="brief"></span></a>
+        <a class="tab" href="#/pars" data-tab="par">PARs <span class="count" data-count="par"></span></a>
+        <a class="tab" href="#/invoices" data-tab="invoice">Invoices <span class="count" data-count="invoice"></span></a>
+        <a class="tab" href="#/andon" data-tab="andon">ANDON <span class="count" data-count="andon"></span></a>
+        <a class="tab" href="#/audit" data-tab="audit" title="Universe and ANDON cells left blank that the Project Brief can fill">Audit <span class="count" data-count="audit"></span></a>
+        <a class="tab tab-universe" href="#/universe" data-tab="universe" id="sideTab">Universe</a>
       </nav>
 
       <section class="pane pane-inbox" aria-label="Inbox">
         <div class="pane-tools">
           <label class="search">
             <span class="i" data-icon="search" aria-hidden="true"></span>
-            <span class="sr-only">Search</span>
-            <input type="search" id="inboxSearch" autocomplete="off" spellcheck="false">
+            <span class="sr-only">Search the inbox</span>
+            <input type="search" id="inboxSearch" placeholder="Search code, project, AM…" autocomplete="off" spellcheck="false">
           </label>
           <button type="button" class="icon-btn" id="refreshBtn" aria-label="Refresh" title="Refresh">
             <span class="i" data-icon="refresh" aria-hidden="true"></span>
           </button>
         </div>
-        <p class="updated" id="updated"></p>
+        <p class="list-status" id="updated" aria-live="polite"></p>
         <div class="callout" id="loadMsg" role="alert" hidden></div>
         <div class="loader" id="loader" hidden></div>
         <div class="cards" id="cards"></div>
-        <p class="empty" id="emptyNote" hidden></p>
+        <p class="empty small" id="emptyNote" hidden></p>
         <p class="hidden-note" id="hiddenNote"></p>
       </section>
 
       <section class="pane pane-universe" aria-labelledby="uniTitle">
-        <header class="uni-head">
-          <div class="uni-title">
+        <header class="page-head pane-head">
+          <div>
             <h2 id="uniTitle">Universe</h2>
-            <p class="uni-sub" id="uniSub"></p>
+            <p class="lede sm" id="uniSub"></p>
           </div>
-          <div class="uni-tools">
+          <div class="page-tools">
             <label class="search search-sm">
               <span class="i" data-icon="search" aria-hidden="true"></span>
               <span class="sr-only">Search the Universe</span>
-              <input type="search" id="uniSearch" placeholder="Search" autocomplete="off" spellcheck="false">
+              <input type="search" id="uniSearch" placeholder="Search client, project, code, BD, AM…" autocomplete="off" spellcheck="false">
             </label>
             <label class="select">
               <span class="sr-only">Year</span>
@@ -144,44 +146,47 @@
             </a>
           </div>
         </header>
-        <div class="uni-wrap" id="uniWrap">
-          <table class="uni" id="uniTable"></table>
+        <div class="tbl-wrap uni-wrap" id="uniWrap">
+          <table class="tbl uni" id="uniTable"></table>
           <div class="loader" id="uniLoader" hidden></div>
-          <p class="empty" id="uniEmpty" hidden></p>
+          <div class="empty small" id="uniEmpty" hidden></div>
         </div>
         <p class="uni-foot" id="uniFoot"></p>
       </section>
 
       <section class="pane pane-universe pane-collections" aria-labelledby="colTitle">
-        <header class="uni-head">
-          <div class="uni-title">
+        <header class="page-head pane-head">
+          <div>
             <h2 id="colTitle">Collections</h2>
-            <p class="uni-sub" id="colSub"></p>
+            <p class="lede sm" id="colSub"></p>
           </div>
-          <div class="uni-tools">
+          <div class="page-tools">
             <label class="search search-sm">
               <span class="i" data-icon="search" aria-hidden="true"></span>
               <span class="sr-only">Search Collections</span>
-              <input type="search" id="colSearch" placeholder="Search" autocomplete="off" spellcheck="false">
+              <input type="search" id="colSearch" placeholder="Search AR name, code, invoice no.…" autocomplete="off" spellcheck="false">
             </label>
             <a class="icon-btn" id="colOpen" target="_blank" rel="noopener" aria-label="Open Collections in Lark" title="Open in Lark">
               <span class="i" data-icon="external" aria-hidden="true"></span>
             </a>
           </div>
         </header>
-        <div class="uni-wrap">
-          <table class="uni coll" id="colTable"></table>
+        <div class="tbl-wrap uni-wrap">
+          <table class="tbl uni coll" id="colTable"></table>
           <div class="loader" id="colLoader" hidden></div>
-          <p class="empty" id="colEmpty" hidden></p>
+          <div class="empty small" id="colEmpty" hidden></div>
         </div>
       </section>
     </section>
 
     <!-- Settings ------------------------------------------------------------------>
-    <section class="view view-settings" data-view="settings" hidden>
-      <div class="settings-head">
-        <a class="back" href="#/" id="settingsBack"><span class="i" data-icon="arrowLeft" aria-hidden="true"></span> Back</a>
-        <h1>Settings</h1>
+    <section class="view view-settings narrow" data-view="settings" aria-labelledby="settingsTitle">
+      <div class="page-head">
+        <div>
+          <a class="back" href="#/" id="settingsBack"><span class="i" data-icon="arrowLeft" aria-hidden="true"></span> Back</a>
+          <h1 id="settingsTitle">Settings</h1>
+          <p class="lede sm">Saved in this browser only.</p>
+        </div>
       </div>
       <div class="settings">
         <section class="card set-card" aria-labelledby="accTitle">
@@ -202,11 +207,8 @@
           <h2 id="connTitle">Connections</h2>
           <ul class="status-list" id="connList"></ul>
           <p class="set-sub" id="envNote"></p>
-        </section>
-
-        <section class="card set-card" id="advancedCard" aria-labelledby="advTitle" hidden>
-          <details class="advanced" id="advanced">
-            <summary id="advTitle">Advanced: connection service address</summary>
+          <details class="advanced" id="advanced" hidden>
+            <summary>Advanced: connection service address</summary>
             <p class="set-sub">For testing on this computer only. Leave it empty to use the hosted service.</p>
             <label class="field">
               <span>Proxy address</span>
@@ -218,12 +220,18 @@
             </div>
           </details>
         </section>
+
+        <section class="card set-card" aria-labelledby="localTitle">
+          <h2 id="localTitle">This browser</h2>
+          <p class="set-sub">Clear the audit cards you hid, the tables' sort order and their collapsed groups. Your login and theme are kept.</p>
+          <div class="row"><button type="button" class="btn btn-ghost" id="clearLocal">Clear local data</button></div>
+        </section>
       </div>
     </section>
   </main>
 
   <!-- Push confirmation ------------------------------------------------------------>
-  <dialog class="modal" id="sheet" aria-labelledby="sheetTitle">
+  <dialog class="modal wide" id="sheet" aria-labelledby="sheetTitle">
     <form class="modal-form" id="sheetForm">
       <header class="modal-head">
         <h2 id="sheetTitle"></h2>
@@ -233,7 +241,7 @@
       <p class="form-error" id="sheetError" role="alert" hidden></p>
       <footer class="modal-actions">
         <button type="button" class="btn btn-ghost" id="sheetCancel">Cancel</button>
-        <button type="button" class="btn btn-primary" id="sheetGo"><span class="btn-label"></span></button>
+        <button type="button" class="btn btn-primary" id="sheetGo"><span class="label"></span></button>
       </footer>
     </form>
   </dialog>
@@ -246,13 +254,13 @@
         <p class="modal-sub" id="detailsSub"></p>
       </header>
       <div class="modal-body">
-        <div class="field"><label class="label" for="dInvoiceNo">Invoice Number</label>
+        <div class="field"><label class="field-label" for="dInvoiceNo">Invoice Number <em>(optional)</em></label>
           <input type="text" id="dInvoiceNo" autocomplete="off" placeholder="e.g. INV-1680"></div>
-        <div class="field"><label class="label" for="dSiNo">SI Number</label>
+        <div class="field"><label class="field-label" for="dSiNo">SI Number <em>(optional)</em></label>
           <input type="text" id="dSiNo" autocomplete="off" placeholder="e.g. 610"></div>
-        <div class="field"><label class="label" for="dDate">Invoice Date</label>
+        <div class="field"><label class="field-label" for="dDate">Invoice Date <em>(optional)</em></label>
           <div id="dDateBox"></div></div>
-        <div class="field"><span class="label">Invoice</span>
+        <div class="field"><span class="field-label">Invoice <em>(optional)</em></span>
           <ul class="files" id="dFiles"></ul>
           <label class="btn btn-sm file-btn"><span class="i" data-icon="plus" aria-hidden="true"></span> Add a file
             <input type="file" id="dFile" multiple hidden></label>
@@ -262,12 +270,27 @@
       <p class="form-error" id="detailsError" role="alert" hidden></p>
       <footer class="modal-actions">
         <button type="button" class="btn btn-ghost" id="detailsCancel">Cancel</button>
-        <button type="button" class="btn btn-primary" id="detailsSave"><span class="btn-label">Save details</span></button>
+        <button type="button" class="btn btn-primary" id="detailsSave"><span class="label">Save details</span></button>
       </footer>
     </form>
   </dialog>
 
   <div class="toasts" id="toasts" aria-live="polite"></div>
+
+  <!-- Boot watchdog: if Polaris never starts (a module failed to load, or the page was
+       opened from a file), say so calmly instead of leaving a dead page. app.js sets
+       <html data-booted> at the end of its start-up. -->
+  <script>
+    setTimeout(function () {
+      if (document.documentElement.hasAttribute("data-booted")) return;
+      var d = document.createElement("div");
+      d.className = "banner callout callout-err";
+      d.setAttribute("role", "alert");
+      d.innerHTML = '<div><p><b>Polaris couldn\u2019t start.</b> Reload the page. If it keeps happening, open it from its web address (not a saved file).</p></div>' +
+                    '<button type="button" class="btn btn-sm" onclick="location.reload()">Reload</button>';
+      (document.getElementById("main") || document.body).prepend(d);
+    }, 8000);
+  </script>
 
   <script>document.write('<script type="module" src="js/app.js?v=' + window.POLARIS_BUILD + '"><\/script>');</script>
 </body>

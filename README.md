@@ -61,7 +61,9 @@ phone and on a PC, and every change is made as you, with your own Lark login.
    a pushed brief land (it glows briefly). On a phone, open the **Universe** tab
    or tap **View** in the message after a push.
 6. **Settings** (the gear beside your picture): your login, Light / Dark / System
-   theme, and connection status.
+   theme, and connection status. **This browser > Clear local data** forgets the
+   audit cards you hid and how the tables are sorted and folded (your login and
+   theme stay); **Undo** in the message puts them back.
 
 ---
 
@@ -378,7 +380,9 @@ the live tables.
 
 | File | Purpose |
 | ---- | ------- |
-| `index.html`, `css/app.css` | The page and its styles (light and dark themes). |
+| `index.html` | The page. |
+| `css/theme.css`, `css/mineski-base.css` | Polaris's colors (light and dark) and the shared Mineski stylesheet: unedited copies of `design-ref/mineski-design-language/assets/themes/polaris.css` and `assets/mineski-base.css`. |
+| `css/app.css` | Only what is Polaris's own: the workspace, the tables' columns and phone layout, the flow line, the audit and the date field. |
 | `img/` | The Polaris icon (SVG, plus PNGs for the favicon, phones and the home screen). |
 | `manifest.webmanifest` | Lets phones add Polaris to the home screen. |
 | `js/config.js` | Table links and business rules (department, USD rate, VAT, statuses, the Universe view). |
@@ -390,11 +394,12 @@ the live tables.
 | `js/inbox.js` | The cards, the push sheet (with the BD picker) and Ignore / Undo. |
 | `js/universe.js` | The Universe table. |
 | `js/collections.js` | The Collections table and its invoice details sheet. |
-| `js/icons.js`, `js/ui.js` | Icons (the same style as Fetch) and small UI helpers. |
+| `js/icons.js`, `js/ui.js` | The shared Mineski icons and UI helpers: unedited copies of `design-ref/mineski-design-language/assets/`. Change them there, then copy them over. |
+| `js/polaris-ui.js` | Polaris-only helpers on top of `ui.js`: Lark date-only days, the date field, copyable request numbers and project codes in a sentence. |
 | `tests/` | Offline tests, the live read-only check and the end-to-end check. |
 
-Polaris follows the Fetch design principles. One deliberate difference: it uses
-JavaScript modules instead of classic scripts, so the tests run the exact code the
+Polaris follows the Mineski design language (`.claude/skills/mineski-design-language/`).
+One deliberate difference: it uses JavaScript modules instead of classic scripts, so the tests run the exact code the
 page runs; an import map still gives every module a fresh URL on each visit.
 
 ---

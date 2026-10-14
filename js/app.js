@@ -5,8 +5,7 @@
 import { ENV_LABEL, TABLE_LINKS, RULES } from "./config.js";
 import { parseBaseLink, loadEverything, loadUniverse, selectOptions, TABLE_TITLES, computedTypes } from "./ops.js";
 import { indexUniverse, indexCollections, briefCards, parCards, collectionCards, stepStatus, peoplePool, pmPool, auditCards, briefsByCode } from "./sync.js";
-import { $, $$, h, ic, toast, fmt, store, recall, sleep } from "./ui.js";
-import { ICONS } from "./icons.js";
+import { $, $$, h, ic, fillIcons, toast, fmt, store, recall, sleep, initTheme } from "./ui.js";
 import {
   lark, wake, conn, onConn, describe, isDeadToken, LarkError,
   proxyHost, proxyOverride, setProxyOverride, isLocalPage, HOSTED_PROXY,
@@ -18,6 +17,8 @@ import { createCollections } from "./collections.js";
 
 const tables = Object.fromEntries(Object.entries(TABLE_LINKS).map(([k, link]) => [k, parseBaseLink(link)]));
 const KEY = { theme: "polaris.theme", tab: "polaris.tab" };
+// What "Clear local data" forgets: views and hidden cards, never the login or the theme.
+const LOCAL_KEYS = ["polaris.auditHidden", "polaris.uniSort", "polaris.uniCollapsed", "polaris.colSort", "polaris.colCollapsed"];
 const STALE_AFTER_MS = 5 * 60 * 1000;    // reload when the page comes back after this long
 const LOW_SESSION_MS = 10 * 60 * 1000;
 
@@ -119,7 +120,7 @@ function onRoute() {
 
 /* ======================= rendering ======================= */
 function render() {
-  for (const v of $$(".view")) v.hidden = v.dataset.view !== S.view;
+  for (const v of $$(".view")) v.classList.toggle("active", v.dataset.view === S.view);
   renderHeader();
   $("#blockNote").hidden = !conn.blocked;
   if (S.view === "login") renderLogin();
@@ -132,12 +133,12 @@ function render() {
     $("#sideTab").href = `#/${side}`;
     for (const t of $$(".tab")) {
       const on = t.dataset.tab === (S.show === "universe" && !isSplit() ? "universe" : S.tab);
-      t.setAttribute("aria-selected", String(on));
+      if (on) t.setAttribute("aria-current", "page"); else t.removeAttribute("aria-current");
       const n = t.querySelector("[data-count]");
       if (n) n.textContent = S.lists && S.lists[n.dataset.count] ? String(S.lists[n.dataset.count].cards.length) : "";
     }
     // On a phone the tab strip scrolls: keep the open tab in view.
-    const strip = $(".tabs"), open = strip.querySelector('[aria-selected="true"]');
+    const strip = $(".tabs"), open = strip.querySelector('[aria-current="page"]');
     if (open && strip.scrollWidth > strip.clientWidth) {
       const left = open.offsetLeft - 8, right = open.offsetLeft + open.offsetWidth + 8;
       if (left < strip.scrollLeft) strip.scrollLeft = left;
@@ -204,7 +205,7 @@ async function login(returnTo) {
 
 function sessionEnded(message) {
   auth.clearSession();
-  if ($("#sheet").open) $("#sheet").close();
+  for (const d of document.querySelectorAll("dialog[open]")) d.close();   // any open sheet: the push sheet or invoice details
   S.data = null; S.lists = null; S.user = null; S.loadError = null;
   S.loginNote = message || "Your login ended after about 2 hours. Log in again to keep going.";
   S.returnTo = location.hash || "#/briefs";
@@ -421,9 +422,6 @@ function renderSettings() {
         h("button", { type: "button", class: "btn btn-sm btn-primary", onclick: () => login("#/briefs") }, "Log in with Lark")));
   }
 
-  const theme = recall("local", KEY.theme) || "system";
-  for (const b of $$("#themeSeg [data-theme-choice]")) b.setAttribute("aria-checked", String(b.dataset.themeChoice === theme));
-
   const proxyState = conn.blocked ? ["is-err", "Blocked by this browser. Allow it in your ad blocker, then reload."]
     : { awake: ["is-ok", "Awake"], waking: ["is-warn", "Waking up… This can take up to a minute."],
         down: ["is-err", `Unreachable${conn.detail ? ` (${conn.detail})` : ""}`] }[conn.proxy]
@@ -449,7 +447,7 @@ function renderSettings() {
   $("#envNote").textContent = ENV_LABEL
     ? `Polaris is connected to the ${ENV_LABEL.toLowerCase()} tables. To go live, change the links in js/config.js.`
     : "";
-  $("#advancedCard").hidden = !isLocalPage();
+  $("#advanced").hidden = !isLocalPage();
   const input = $("#proxyInput");
   if (document.activeElement !== input) input.value = proxyOverride();
   input.placeholder = HOSTED_PROXY;
@@ -459,10 +457,25 @@ function sessionLine() {
   return `Logged in until ${fmt.time(auth.endsAt())} · ${fmt.duration(auth.msLeft())} left`;
 }
 
-function applyTheme(choice) {
-  if (choice === "light" || choice === "dark") document.documentElement.dataset.theme = choice;
-  else delete document.documentElement.dataset.theme;
-  store("local", KEY.theme, choice === "system" ? undefined : choice);
+/* "This browser": forget the hidden audit cards and how the tables are sorted and
+   folded (the login and the theme stay). Undo puts them back. */
+function clearLocal() {
+  const saved = LOCAL_KEYS.map(k => [k, recall("local", k)]);
+  LOCAL_KEYS.forEach(k => store("local", k));
+  reloadLocal();
+  toast("Cleared this browser's hidden cards, sort order and folded groups.", {
+    type: "success", detail: "Your login and theme are kept.", action: "Undo", onAction: () => {
+      saved.forEach(([k, v]) => { if (v !== null) store("local", k, v); });
+      reloadLocal();
+    },
+  });
+}
+function reloadLocal() {
+  S.auditHide = new Set(recall("local", "polaris.auditHidden") || []);
+  universe.loadPrefs();
+  collections.loadPrefs();
+  if (S.data) recompute();
+  render();
 }
 
 /* ======================= session clock ======================= */
@@ -482,15 +495,11 @@ function tickSession() {
 }
 
 /* ======================= wiring ======================= */
-for (const el of $$("[data-icon]")) el.innerHTML = ICONS[el.dataset.icon] || "";
+fillIcons();
+initTheme($("#themeSeg"), KEY.theme);
 $("#loginBtn").addEventListener("click", () => login());
 $("#reloadBtn").addEventListener("click", () => location.reload());
-$("#themeSeg").addEventListener("click", (e) => {
-  const b = e.target.closest("[data-theme-choice]");
-  if (!b) return;
-  applyTheme(b.dataset.themeChoice);
-  renderSettings();
-});
+$("#clearLocal").addEventListener("click", clearLocal);
 $("#proxySave").addEventListener("click", () => {
   const v = $("#proxyInput").value.trim();
   if (v && !/^https?:\/\//.test(v)) { toast("That address should start with https:// or http://.", { type: "error" }); return; }
@@ -548,3 +557,4 @@ setInterval(tickSession, 20000);
   wake();
   onRoute();
 })();
+document.documentElement.dataset.booted = "";   // started: the boot watchdog in index.html stands down

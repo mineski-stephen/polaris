@@ -5,7 +5,8 @@
 import { collectionsView, collectionRow, invoiceDetailsPatch, shortName } from "./sync.js";
 import { saveInvoiceDetails, loadCollections } from "./ops.js";
 import { RULES } from "./config.js";
-import { $, h, ic, fmt, flash, store, recall, toast, reduceMotion, copyable, copyableText, dateField } from "./ui.js";
+import { $, h, ic, fmt, flash, store, recall, toast, copyable, busy } from "./ui.js";
+import { dayOnly, copyableText, dateField } from "./polaris-ui.js";
 import { describe, isDeadToken, uploadToBase } from "./net.js";
 
 const KEY = { sort: "polaris.colSort", collapsed: "polaris.colCollapsed" };
@@ -16,12 +17,13 @@ const COLUMNS = [
 
 export function createCollections(ctx) {
   const { S } = ctx;
-  const C = S.col = {
-    sort: recall("local", KEY.sort) === "asc" ? "asc" : "desc",
-    query: "",
-    collapsed: new Set(recall("local", KEY.collapsed) || []),
-    highlight: null,
-  };
+  const C = S.col = { query: "", highlight: null };
+  // The sort and the folded groups are remembered on this device.
+  function loadPrefs() {
+    C.sort = recall("local", KEY.sort) === "asc" ? "asc" : "desc";
+    C.collapsed = new Set(recall("local", KEY.collapsed) || []);
+  }
+  loadPrefs();
   $("#colSearch").addEventListener("input", (e) => { C.query = e.target.value; render(); });
   $("#colOpen").href = ctx.tables.collections.url;
 
@@ -35,7 +37,17 @@ export function createCollections(ctx) {
   function render() {
     renderLoader();
     const table = $("#colTable"), empty = $("#colEmpty");
-    if (!S.data) { table.replaceChildren(); empty.hidden = true; $("#colSub").textContent = ""; return; }
+    if (!S.data) {
+      table.replaceChildren();
+      empty.hidden = !(S.loadError && !S.loading);
+      if (S.loadError) {   // the load failed: say why, with the way out
+        empty.className = "callout callout-err";
+        empty.replaceChildren(ic("alert"), h("div", null, describe(S.loadError)),
+          h("button", { type: "button", class: "btn btn-sm", onclick: () => ctx.loadData() }, "Try again"));
+      }
+      $("#colSub").textContent = "";
+      return;
+    }
     const v = collectionsView(S.data.collections, { statusOrder: S.colStatusOrder || [], sort: C.sort, query: C.query });
     const waiting = v.groups.flatMap(g => g.rows).filter(r => !r.invoiceNo).length;
     $("#colSub").textContent = `${v.count.toLocaleString()} invoice${v.count === 1 ? "" : "s"}` +
@@ -62,7 +74,16 @@ export function createCollections(ctx) {
     });
     table.replaceChildren(head, ...bodies);
     empty.hidden = v.count > 0;
-    empty.textContent = C.query ? `Nothing in Collections matches "${C.query.trim()}".` : "Collections is empty.";
+    if (!S.data.collections.length) {   // a table that has never had a row
+      empty.className = "empty";
+      empty.replaceChildren(h("div", { class: "empty-art", "aria-hidden": "true" }, ic("coin")),
+        h("h2", null, "Collections is empty"),
+        h("p", null, "Invoices you add from the Invoices tab show up here, grouped by status."),
+        h("a", { class: "btn", href: ctx.tables.collections.url, target: "_blank", rel: "noopener" }, ic("external"), "Open in Lark"));
+    } else {
+      empty.className = "empty small";
+      empty.replaceChildren(h("p", null, C.query ? `Nothing in Collections matches "${C.query.trim()}".` : "Collections is empty."));
+    }
     if (C.highlight) land();
   }
 
@@ -71,9 +92,9 @@ export function createCollections(ctx) {
     // Under the AR name: invoice and SI numbers (click to copy), date, file count.
     const sub = [r.invoiceNo ? copyable(r.invoiceNo, { label: "invoice number" }) : "",
                  r.siNo ? ["SI ", copyable(r.siNo, { label: "SI number" })] : "",
-                 r.invoiceDate ? fmt.dayOnly(r.invoiceDate) : "",
+                 r.invoiceDate ? dayOnly(r.invoiceDate) : "",
                  r.files.length ? `${r.files.length} file${r.files.length === 1 ? "" : "s"}` : ""]
-      .filter(x => x !== "").flatMap((x, i) => (i ? [" · ", x] : [x]));
+      .filter(x => x !== "").map(x => h("span", { class: "part" }, x)).flatMap((x, i) => (i ? [" · ", x] : [x]));
     return h("tr", { class: "urow", "data-id": r.id },
       td("c-ar", r.arName || h("span", { class: "none" }, "(no AR name)"), sub.length ? h("span", { class: "sub-line" }, sub) : null),
       td("c-code", r.code ? copyableText(r.code) : ""),
@@ -102,8 +123,7 @@ export function createCollections(ctx) {
       return render();
     }
     C.highlight = null;
-    tr.scrollIntoView({ block: "center", behavior: reduceMotion() ? "auto" : "smooth" });
-    flash(tr);
+    flash(tr);   // scrolls it into view too
   }
   const highlight = (id) => { C.highlight = id; };
 
@@ -125,7 +145,7 @@ export function createCollections(ctx) {
 
   function openDetails(r) {
     edit = { row: r, files: r.files.map(f => ({ ...f })), date: r.invoiceDate || null, dateOk: true, busy: false };
-    $("#detailsSub").replaceChildren(r.arName || r.code, r.request ? [" · request ", copyable(r.request)] : "");
+    $("#detailsSub").replaceChildren(r.arName || r.code, ...(r.request ? [" · request ", copyable(r.request, { label: "request number" })] : []));
     $("#dInvoiceNo").value = r.invoiceNo;
     $("#dSiNo").value = r.siNo;
     $("#dDateBox").replaceChildren(dateField({ id: "dDate", value: edit.date,
@@ -144,13 +164,11 @@ export function createCollections(ctx) {
       h("button", { type: "button", "aria-label": `Remove ${f.name}`, title: "Remove", onclick: () => { edit.files.splice(i, 1); paintFiles(); } }, ic("x")))));
   }
 
-  function setBusy(busy, label) {
-    if (edit) edit.busy = busy;
-    save.disabled = busy;
-    $("#detailsCancel").disabled = busy;
-    save.querySelector(".spinner")?.remove();
-    save.querySelector(".btn-label").textContent = busy ? label || "Saving…" : "Save details";
-    if (busy) save.prepend(h("span", { class: "spinner", "aria-hidden": "true" }));
+  // Busy: a spinner on Save, and a label that says what's happening ("Uploading 1 of 3…").
+  function setBusy(on, label) {
+    if (edit) edit.busy = on;
+    busy(save, on, label || "Saving…");
+    $("#detailsCancel").disabled = on;
   }
 
   async function runSave() {
@@ -212,5 +230,5 @@ export function createCollections(ctx) {
     ctx.render();
   }
 
-  return { render, renderLoader, highlight, refresh };
+  return { render, renderLoader, highlight, refresh, loadPrefs };
 }

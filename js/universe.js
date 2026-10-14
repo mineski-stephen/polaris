@@ -4,7 +4,8 @@
 
 import { UNIVERSE_VIEW } from "./config.js";
 import { universeView, universeRow } from "./sync.js";
-import { $, h, ic, fmt, copyableText, flash, store, recall, toast, reduceMotion } from "./ui.js";
+import { $, h, ic, fmt, flash, store, recall, toast } from "./ui.js";
+import { dayOnly, copyableText } from "./polaris-ui.js";
 import { describe } from "./net.js";
 
 const KEY = { sort: "polaris.uniSort", collapsed: "polaris.uniCollapsed" };
@@ -15,13 +16,13 @@ const COLUMNS = [
 
 export function createUniverse(ctx) {
   const { S } = ctx;
-  const U = S.uni = {
-    year: String(new Date().getFullYear()),
-    sort: recall("local", KEY.sort) === "asc" ? "asc" : UNIVERSE_VIEW.defaultSort,
-    query: "",
-    collapsed: new Set(recall("local", KEY.collapsed) || []),
-    highlight: null,
-  };
+  const U = S.uni = { year: String(new Date().getFullYear()), query: "", highlight: null };
+  // The sort and the folded groups are remembered on this device.
+  function loadPrefs() {
+    U.sort = recall("local", KEY.sort) === "asc" ? "asc" : UNIVERSE_VIEW.defaultSort;
+    U.collapsed = new Set(recall("local", KEY.collapsed) || []);
+  }
+  loadPrefs();
 
   $("#uniYear").addEventListener("change", (e) => { U.year = e.target.value; render(); });
   $("#uniSearch").addEventListener("input", (e) => { U.query = e.target.value; render(); });
@@ -44,7 +45,11 @@ export function createUniverse(ctx) {
     if (!S.data) {
       table.replaceChildren();
       empty.hidden = !(S.loadError && !S.loading);
-      empty.textContent = S.loadError ? describe(S.loadError) : "";
+      if (S.loadError) {   // the load failed: say why, with the way out
+        empty.className = "callout callout-err";
+        empty.replaceChildren(ic("alert"), h("div", null, describe(S.loadError)),
+          h("button", { type: "button", class: "btn btn-sm", onclick: () => ctx.loadData() }, "Try again"));
+      }
       $("#uniSub").textContent = "";
       $("#uniFoot").textContent = "";
       return;
@@ -63,9 +68,9 @@ export function createUniverse(ctx) {
     }
     sel.value = U.year;
 
-    $("#uniSub").textContent = `${v.count.toLocaleString()} project${v.count === 1 ? "" : "s"} · ${fmt.pesoShort(v.amount)} (VAT-Ex.)`;
-    $("#uniFoot").textContent = "Not shown: " +
-      UNIVERSE_VIEW.hiddenStatuses.map(s => `${s} ${v.hiddenCounts[s] || 0}`).join(" · ") + ".";
+    $("#uniSub").textContent = `${v.count.toLocaleString()} project${v.count === 1 ? "" : "s"} · ₱${fmt.short(v.amount)} (VAT-Ex.)`;
+    const hiddenNow = UNIVERSE_VIEW.hiddenStatuses.filter(s => v.hiddenCounts[s]);
+    $("#uniFoot").textContent = hiddenNow.length ? `Not shown: ${hiddenNow.map(s => `${s} ${v.hiddenCounts[s]}`).join(" · ")}.` : "";
 
     const sortBtn = h("button", { type: "button", class: "sort-btn",
       title: U.sort === "desc" ? "Newest first. Click for oldest first." : "Oldest first. Click for newest first.",
@@ -84,15 +89,24 @@ export function createUniverse(ctx) {
         store("local", KEY.collapsed, [...U.collapsed]);
         render();
       } }, ic("caret"), name, h("span", { class: "group-n" }, String(g.rows.length)),
-        h("span", { class: "group-sum" }, g.amount ? fmt.pesoShort(g.amount) : ""));
+        h("span", { class: "group-sum" }, g.amount ? "₱" + fmt.short(g.amount) : ""));
       return h("tbody", { class: open ? "" : "is-collapsed", "data-status": name },
         h("tr", { class: "group" }, h("th", { colspan: String(COLUMNS.length), scope: "rowgroup" }, toggle)),
         g.rows.map(rowEl));
     });
     table.replaceChildren(head, ...bodies);
     empty.hidden = v.count > 0;
-    empty.textContent = U.query ? `Nothing in ${U.year === "all" ? "the Universe" : U.year} matches "${U.query.trim()}".`
-      : `No projects for ${U.year === "all" ? "any year" : U.year} yet.`;
+    if (!S.data.universe.length) {   // a table that has never had a row
+      empty.className = "empty";
+      empty.replaceChildren(h("div", { class: "empty-art", "aria-hidden": "true" }, ic("table")),
+        h("h2", null, "The Universe is empty"),
+        h("p", null, "Briefs you push show up here, grouped by status."),
+        h("a", { class: "btn", href: ctx.tables.universe.url, target: "_blank", rel: "noopener" }, ic("external"), "Open in Lark"));
+    } else {
+      empty.className = "empty small";
+      empty.replaceChildren(h("p", null, U.query ? `Nothing in ${U.year === "all" ? "the Universe" : U.year} matches "${U.query.trim()}".`
+        : `No projects for ${U.year === "all" ? "any year" : U.year} yet.`));
+    }
 
     if (U.highlight) landHighlight();
   }
@@ -110,7 +124,7 @@ export function createUniverse(ctx) {
       who(r.bd, "BD", "c-people c-bd"),
       who(r.am, "AM", "c-people c-am"),
       cell("c-code", r.code ? copyableText(r.code) : ""),
-      cell("c-date", fmt.dayOnly(r.rfp)),
+      cell("c-date", dayOnly(r.rfp)),
       h("td", { class: "brk b1", "aria-hidden": "true" }),
       h("td", { class: "brk b2", "aria-hidden": "true" }));
   }
@@ -139,12 +153,11 @@ export function createUniverse(ctx) {
       return render();
     }
     U.highlight = null;
-    tr.scrollIntoView({ block: "center", behavior: reduceMotion() ? "auto" : "smooth" });
-    flash(tr);
+    flash(tr);   // scrolls it into view too
   }
 
   /* Remember a row to highlight once it's on screen. */
   function highlight(id) { U.highlight = id; }
 
-  return { render, renderLoader, highlight };
+  return { render, renderLoader, highlight, loadPrefs };
 }

@@ -1,0 +1,84 @@
+/* Polaris (Universe updater) - theme tokens, mapped from Polaris's css/app.css
+   onto the canonical token names. Indigo on cool grey-blue.
+   Reference only: a NEW tool must not reuse this hue (see references/brand-and-identity.md).
+
+   Differences from Polaris's own file (fixes, see POLARIS-CHANGES.md in the project root):
+   - Polaris's "--brand-ink" (text ON brand-soft) is --on-brand-soft here
+   - dark-mode toasts use a raised surface (#2A2E4A) instead of #171A33, which was
+     almost the same color as the cards behind it */
+
+:root {
+  --font: "Manrope";
+  --brand: #4B3FE0;
+  --brand-hover: #3E32CF;
+  --brand-strong: #3E32CF;
+  --on-brand: #FFFFFF;
+  --brand-soft: #EEECFF;
+  --brand-text: #4B3FE0;
+  --on-brand-soft: #3127B5;
+  --focus: #4B3FE0;
+
+  --bg: #F5F6FA;
+  --surface: #FFFFFF;
+  --surface-2: #F7F8FC;
+  --surface-3: #171A33;
+  --ink: #151730;
+  --ink-2: #3A3D5C;
+  --muted: #686C88;
+  --line: #E7E8F0;
+  --line-2: #D6D8E6;
+
+  --shadow-rgb: 21, 23, 48;
+  --brand-rgb: 75, 63, 224;
+  --glow: rgba(99, 85, 245, .10);
+  --toast-bg: #171A33;
+  --toast-fg: #EEF0F8;
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --brand: #6355F5;
+  --brand-hover: #7266FF;
+  --brand-strong: #6355F5;
+  --brand-soft: rgba(124, 114, 255, .16);
+  --brand-text: #A9A2FF;
+  --on-brand-soft: #C9C4FF;
+  --focus: #A9A2FF;
+  --bg: #0C0E1F;
+  --surface: #14172B;
+  --surface-2: #1A1D34;
+  --surface-3: #2A2E4A;
+  --ink: #ECEDF7;
+  --ink-2: #C8CAE0;
+  --muted: #9497B4;
+  --line: #262A45;
+  --line-2: #353A5A;
+  --glow: rgba(99, 85, 245, .14);
+  --toast-bg: #2A2E4A;
+  --toast-fg: #ECEDF7;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --brand: #6355F5;
+    --brand-hover: #7266FF;
+    --brand-strong: #6355F5;
+    --brand-soft: rgba(124, 114, 255, .16);
+    --brand-text: #A9A2FF;
+    --on-brand-soft: #C9C4FF;
+    --focus: #A9A2FF;
+    --bg: #0C0E1F;
+    --surface: #14172B;
+    --surface-2: #1A1D34;
+    --surface-3: #2A2E4A;
+    --ink: #ECEDF7;
+    --ink-2: #C8CAE0;
+    --muted: #9497B4;
+    --line: #262A45;
+    --line-2: #353A5A;
+    --glow: rgba(99, 85, 245, .14);
+    --toast-bg: #2A2E4A;
+    --toast-fg: #ECEDF7;
+    color-scheme: dark;
+  }
+}

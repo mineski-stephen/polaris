@@ -7,10 +7,15 @@ import {
   universeFromBrief, collectionsChange, stepStatus, parAfterAdding, defaultVat, amountFormula, vatMentions,
   vatExAmount, people, andonFromBrief, auditPatch,
 } from "./sync.js";
-import { $, h, ic, toast, fmt, flash, reduceMotion, copyable, copyableText, store, dateField } from "./ui.js";
+import { $, h, ic, toast, fmt, flash, copyable, store, collapse, busy, radioKeys } from "./ui.js";
+import { dayOnly, copyableText, dateField } from "./polaris-ui.js";
 import { describe, isDeadToken, conn, uploadToBase } from "./net.js";
 
 const NOUN = { brief: "briefs", par: "PARs", invoice: "invoices", andon: "briefs for ANDON", audit: "projects with blanks" };
+// The search box says what it looks through on each tab.
+const SEARCHES = { brief: "Search code, project, AM…", par: "Search request no., code, project…",
+                   invoice: "Search request no., code, project…", andon: "Search code, project, AM…",
+                   audit: "Search project, code, blank columns…" };
 const STAGE_ORDER = ["universe", "brief", "par", "invoice", "collections", "andon"];
 // The table each card comes from (ANDON cards are Project Briefs too; invoice
 // cards say which table they come from themselves: a won project is a Universe row).
@@ -36,12 +41,12 @@ export function createInbox(ctx) {
 
   /* ======================= list ======================= */
   function render() {
-    search.placeholder = `Search ${NOUN[S.tab]}`;
+    search.placeholder = SEARCHES[S.tab];
     if (search.value !== S.query[S.tab]) search.value = S.query[S.tab];
     $("#refreshBtn").classList.toggle("is-busy", S.loading);
     $("#refreshBtn").disabled = S.loading;
-    $("#updated").textContent = S.loading && S.quiet ? "Refreshing…"
-      : S.loadedAt ? `Updated ${fmt.time(S.loadedAt)}` : "";
+    $("#updated").replaceChildren(...(S.loading && S.quiet ? [h("span", { class: "spinner", "aria-hidden": "true" }), "Refreshing…"]
+      : S.loadedAt ? [`Updated ${fmt.time(S.loadedAt)}`] : []));
     renderMessage();
     renderLoader();
     renderCards();
@@ -80,7 +85,7 @@ export function createInbox(ctx) {
       const st = S.stages[k];
       const done = st && st.total !== null && st.n >= st.total;
       return h("li", { class: done ? "done" : "" },
-        done ? ic("check") : st ? h("span", { class: "spinner" }) : h("span", { class: "dot" }),
+        done ? ic("check") : st ? h("span", { class: "spinner" }) : h("span", { class: "slot" }),
         TABLE_TITLES[k], h("span", { class: "n" }, st ? `${st.n.toLocaleString()}${st.total ? ` of ${st.total.toLocaleString()}` : ""}` : ""));
     }));
     el.replaceChildren(...head, ...(S.waking ? [] : [stages]));
@@ -114,7 +119,7 @@ export function createInbox(ctx) {
     if (S.flashCard) {
       const el = box.querySelector(`[data-id="${S.flashCard}"]`);
       S.flashCard = null;
-      if (el) { el.scrollIntoView({ block: "center", behavior: reduceMotion() ? "auto" : "smooth" }); flash(el); }
+      if (el) flash(el);   // scrolls it into view too
     }
   }
 
@@ -138,26 +143,26 @@ export function createInbox(ctx) {
       meta = [c.value !== null ? h("b", null, fmt.money(c.value, c.currency)) : "No contract value",
               c.am.length ? h("span", { title: c.am.map(u => u.name).join(", ") }, ` · AM ${c.am.map(u => u.short).join(", ")}`) : "",
               c.kind === "andon" && c.department ? ` · ${c.department}` : ""];
-      c.problems.forEach(p => notes.push(h("li", { class: "is-block" }, p)));
+      c.problems.forEach(p => notes.push(h("li", { class: "is-plain" }, p)));
       if (c.similar) {
         notes.push(h("li", null, copyableText(`Note: looks like "${c.similar.project}"${c.similar.code ? ` (${c.similar.code})` : ""}, ` +
           `already in ${c.kind === "andon" ? "ANDON" : "the Universe"}. If it's the same project, ignore this one.`)));
       }
     } else if (c.kind === "par") {
       const t = c.target;
-      meta = ["PAR ", copyable(c.requestNo),
+      meta = ["PAR ", copyable(c.requestNo, { label: "request number" }),
               t ? ` · goes to "${t.project || t.codeText}"` : "",
               t && t.par ? [" (already has ", copyableText(t.par), ")"] : ""];
       c.notes.forEach(n => notes.push(h("li", null, copyableText(`Note: ${n}`))));
     } else {
       const t = c.targets.find(x => x.id === c.target);
       meta = [c.amount !== null ? h("b", null, fmt.money(c.amount, c.currency)) : "No amount",
-              c.step === "won" ? ` · Amount (VAT-Inc.) · Universe: ${c.status}` : [" · request ", copyable(c.requestNo)],
+              c.step === "won" ? ` · Amount (VAT-Inc.) · Universe: ${c.status}` : [" · request ", copyable(c.requestNo, { label: "request number" })],
               !t && c.existing ? ` · ${c.existing} already in Collections for this project` : ""];
       notes.unshift(h("li", { class: "flow" }, flowEl(c, c.target)));
       c.notes.forEach(n => notes.push(h("li", null, copyableText(`Note: ${n}`))));
     }
-    if (c.blocked) notes.push(h("li", { class: "is-block" }, c.blocked, fixLink(c.blocked, c.code)));
+    if (c.blocked) notes.push(h("li", { class: "is-plain" }, c.blocked, fixLink(c.blocked, c.code)));
     const pushable = writable && !c.blocked && !(c.problems && c.problems.length);
     // A won project is hidden with an IGNORE box on its Universe row, if the Universe has one.
     const ignorable = c.source !== "universe" || ctx.hasField("universe", ignoreFieldOf(c));
@@ -222,7 +227,7 @@ export function createInbox(ctx) {
 
     if (value && button) {   // let the card slide out, then drop it
       const el = button.closest(".item");
-      if (el && !reduceMotion()) { el.classList.add("is-leaving"); await new Promise(r => setTimeout(r, 160)); }
+      await collapse(el);
     }
     if (!value) { S.entering.add(c.id); S.flashCard = c.id; }
     apply(value);
@@ -276,7 +281,7 @@ export function createInbox(ctx) {
     for (const f of ["AM", "MKT", "BD"]) people(c.brief.record.fields[f]).forEach(u => names.set(u.id, u.name));
     if (Array.isArray(v)) return v.map(x => (x && x.id ? names.get(x.id) || x.id : String(x))).join(", ");
     if (v && typeof v === "object") return v.text || v.link || "";
-    if (AUDIT_DATES.has(k)) return fmt.dayOnly(v);
+    if (AUDIT_DATES.has(k)) return dayOnly(v);
     if (k === "Amount (VAT-Ex.) (PHP)") return fmt.peso(v);
     return String(v);
   }
@@ -288,11 +293,10 @@ export function createInbox(ctx) {
       h("div", { class: "item-head" },
         copyable(c.code, { label: "project code", cls: "code" }),
         h("span", { class: "badge badge-info" }, AUDIT_WHERE[c.target]),
-        c.status ? h("span", { class: "item-date", style: "margin-left:0" }, c.status) : null,
         h("span", { class: "item-date" }, c.submittedAt ? `Brief ${fmt.day(c.submittedAt)}` : "")),
       h("h3", null, c.name || "(no name)"),
       h("p", { class: "item-meta" }, h("b", null, `${c.gaps.length} blank`), ` in ${AUDIT_WHERE[c.target]} that the brief `,
-        copyable(c.requestNo), " can fill"),
+        copyable(c.requestNo, { label: "request number" }), " can fill", c.status ? ` · ${c.status}` : ""),
       h("ul", { class: "notes" }, h("li", { class: "flow" }, h("span", { class: "flow-row" }, "Missing"),
         h("span", { class: "flow-step" }, c.gaps.join(" · ")))),
       h("div", { class: "item-actions" },
@@ -305,7 +309,7 @@ export function createInbox(ctx) {
   async function hideAudit(c, value, button) {
     if (value && button) {
       const el = button.closest(".item");
-      if (el && !reduceMotion()) { el.classList.add("is-leaving"); await new Promise(r => setTimeout(r, 160)); }
+      await collapse(el);
     }
     if (value) S.auditHide.add(c.hideKey); else { S.auditHide.delete(c.hideKey); S.entering.add(c.id); S.flashCard = c.id; }
     store("local", "polaris.auditHidden", [...S.auditHide]);
@@ -336,7 +340,7 @@ export function createInbox(ctx) {
     const vatBox = h("div", { class: "field" });
     const show = (k, v) => {
       if (Array.isArray(v)) return v.map(x => (x && x.id ? ch.names.get(x.id) || x.id : String(x))).join(", ");
-      if (AUDIT_DATES.has(k)) return fmt.dayOnly(v);
+      if (AUDIT_DATES.has(k)) return dayOnly(v);
       if (k === AMOUNT) return fmt.peso(v);
       return String(v);
     };
@@ -347,7 +351,7 @@ export function createInbox(ctx) {
       sheet.blocked = bad.length ? `Check ${bad.join(", ")}: ${bad.length === 1 ? "it isn't" : "they aren't"} valid yet.`
         : n ? "" : "Tick at least one field to fill.";
       go.disabled = sheet.busy || !!sheet.blocked;
-      if (!sheet.busy) go.querySelector(".btn-label").textContent = n ? `Fill ${n} field${n === 1 ? "" : "s"}` : "Fill";
+      if (!sheet.busy) go.querySelector(".label").textContent = n ? `Fill ${n} field${n === 1 ? "" : "s"}` : "Fill";
       blockNote.hidden = !sheet.blocked || !n;
       blockNote.textContent = sheet.blocked;
       vatBox.hidden = !(c.needsVat && ch.fields.includes(AMOUNT));
@@ -388,8 +392,8 @@ export function createInbox(ctx) {
       }
       if (type === 4) {
         const now = new Set(Array.isArray(v) ? v : []);
-        return h("div", { class: "toggles", role: "group", "aria-label": k }, (selects[k] || []).map(o =>
-          h("button", { type: "button", "aria-pressed": String(now.has(o)), onclick: (e) => {
+        return h("div", { class: "chips", role: "group", "aria-label": k }, (selects[k] || []).map(o =>
+          h("button", { type: "button", class: "chip-opt", "aria-pressed": String(now.has(o)), onclick: (e) => {
             if (now.has(o)) now.delete(o); else now.add(o);
             e.currentTarget.setAttribute("aria-pressed", String(now.has(o)));
             changed(k, [...now]);
@@ -426,8 +430,8 @@ export function createInbox(ctx) {
         editor(k));
     });
     if (c.needsVat) {
-      const seg = h("div", { class: "seg", role: "radiogroup", "aria-label": "VAT" },
-        ["12%", "0%"].map(v => h("button", { type: "button", role: "radio", "aria-checked": String(ch.vat === v), onclick: (e) => {
+      const seg = h("div", { class: "chips", role: "radiogroup", "aria-label": "VAT" },
+        ["12%", "0%"].map(v => h("button", { type: "button", class: "chip-opt", role: "radio", "aria-checked": String(ch.vat === v), onclick: (e) => {
           ch.vat = v;
           for (const b of e.currentTarget.parentElement.children) b.setAttribute("aria-checked", String(b.textContent === v));
           // An amount still as the brief has it follows the VAT; one typed in stays.
@@ -437,7 +441,8 @@ export function createInbox(ctx) {
           }
           refresh();
         } }, v)));
-      vatBox.replaceChildren(h("span", { class: "label" }, "VAT"), seg,
+      radioKeys(seg);
+      vatBox.replaceChildren(h("span", { class: "field-label" }, "VAT"), seg,
         h("p", { class: "set-sub" }, "The row has no VAT%, so the amount needs one. It's written to VAT% too."));
     }
     put(body,
@@ -475,8 +480,8 @@ export function createInbox(ctx) {
     $("#sheetTitle").textContent = { brief: "Push to Universe", par: "Add PAR to Universe", invoice: "Add to Collections", andon: "Add to ANDON",
                                      audit: `Fill blanks in ${c.target === "andon" ? "ANDON" : "the Universe"}` }[c.kind];
     $("#sheetSub").replaceChildren(copyable(c.code, { label: "project code", empty: "No code" }),
-      (c.kind === "par" || c.kind === "invoice") && c.requestNo ? [" · request ", copyable(c.requestNo)] : "", ` · ${c.name}`);
-    go.querySelector(".btn-label").textContent = { brief: "Push to Universe", par: "Add PAR", invoice: "Add to Collections", andon: "Add to ANDON", audit: "Fill" }[c.kind];
+      ...((c.kind === "par" || c.kind === "invoice") && c.requestNo ? [" · request ", copyable(c.requestNo, { label: "request number" })] : []), ` · ${c.name}`);
+    go.querySelector(".label").textContent = { brief: "Push to Universe", par: "Add PAR", invoice: "Add to Collections", andon: "Add to ANDON", audit: "Fill" }[c.kind];
     $("#sheetError").hidden = true;
     const body = $("#sheetBody");
     body.replaceChildren();
@@ -491,25 +496,17 @@ export function createInbox(ctx) {
     (first || cancel).focus();
   }
 
-  function setBusy(busy) {
-    if (sheet) sheet.busy = busy;
-    go.disabled = busy || !!(sheet && sheet.blocked);
-    cancel.disabled = busy;
-    const label = go.querySelector(".btn-label");
-    go.querySelector(".spinner")?.remove();
-    if (busy) {
-      go.dataset.idle = label.textContent;
-      label.textContent = "Pushing…";
-      go.prepend(h("span", { class: "spinner", "aria-hidden": "true" }));
-    } else if (go.dataset.idle) {
-      label.textContent = go.dataset.idle;
-      delete go.dataset.idle;
-    }
+  // Busy: a spinner on the button and "Pushing…" (uploads write their progress into the label).
+  function setBusy(on) {
+    if (sheet) sheet.busy = on;
+    busy(go, on, "Pushing…");
+    go.disabled = on || !!(sheet && sheet.blocked);
+    cancel.disabled = on;
   }
 
   const put = (parent, ...kids) => parent.append(...kids.filter(Boolean));
   const fieldEl = (labelText, optional, control, id) =>
-    h("div", { class: "field" }, h("label", { class: "label", for: id }, labelText, optional ? h("em", null, " (optional)") : null), control);
+    h("div", { class: "field" }, h("label", { class: "field-label", for: id }, labelText, optional ? h("em", null, " (optional)") : null), control);
 
   /* --- brief --- */
   function buildBrief(body, c) {
@@ -526,7 +523,7 @@ export function createInbox(ctx) {
       for (const k of ["AM", "MKT"]) people(c.record.fields[k]).forEach(u => names.set(u.id, u.name));
       written.replaceChildren(...Object.entries(payload).filter(([k]) => !BRIEF_INPUTS.has(k)).flatMap(([k, v]) => {
         let text = Array.isArray(v) ? v.map(u => names.get(u.id) || u.id).join(", ")
-                 : DATE_FIELDS.has(k) ? fmt.dayOnly(v) : String(v);
+                 : DATE_FIELDS.has(k) ? dayOnly(v) : String(v);
         return [h("dt", null, k), h("dd", { class: text.length > 140 || text.includes("\n") ? "is-long" : "" }, text)];
       }));
     };
@@ -540,20 +537,21 @@ export function createInbox(ctx) {
       id: "sheetBd", selected: ch.bd, pool: S.pool, placeholder: "Add a BD",
       onChange: (list) => { ch.bd = list; refresh(); },
     });
-    const vatSeg = h("div", { class: "seg", role: "radiogroup", "aria-label": "VAT" },
-      ["12%", "0%"].map(v => h("button", { type: "button", role: "radio", "aria-checked": String(ch.vat === v),
+    const vatSeg = h("div", { class: "chips", role: "radiogroup", "aria-label": "VAT" },
+      ["12%", "0%"].map(v => h("button", { type: "button", class: "chip-opt", role: "radio", "aria-checked": String(ch.vat === v),
         onclick: (e) => {
           ch.vat = v;
           for (const b of e.currentTarget.parentElement.children) b.setAttribute("aria-checked", String(b.textContent === v));
           refresh();
         } }, v)));
+    radioKeys(vatSeg);
     const said = vatMentions(c.record.fields["Remarks"]);
     const linksBox = h("div", { class: "field" });
     const showLinks = () => {
       const ta = h("textarea", { id: "sheetLinks", rows: "2", placeholder: "Paste links, one per line" });
       ta.value = ch.otherLinks;
       ta.addEventListener("input", () => { ch.otherLinks = ta.value; refresh(); });
-      linksBox.replaceChildren(h("label", { class: "label", for: "sheetLinks" }, "Other Links", h("em", null, " (optional)")), ta);
+      linksBox.replaceChildren(h("label", { class: "field-label", for: "sheetLinks" }, "Other Links", h("em", null, " (optional)")), ta);
       return ta;
     };
     if (ch.showLinks || ch.otherLinks) showLinks();
@@ -563,7 +561,7 @@ export function createInbox(ctx) {
     put(body,
       fieldEl("Client", true, client, "sheetClient"),
       fieldEl("BD", true, bd, "sheetBd"),
-      h("div", { class: "field" }, h("span", { class: "label" }, "VAT"), h("div", { class: "vat" }, vatSeg, amountEl)),
+      h("div", { class: "field" }, h("span", { class: "field-label" }, "VAT"), h("div", { class: "vat" }, vatSeg, amountEl)),
       said.length ? h("p", { class: "note" }, `Note: the brief says "${said.join(" ")}"`) : null,
       linksBox,
       h("p", { class: "subhead" }, "Also written"),
@@ -585,7 +583,7 @@ export function createInbox(ctx) {
       written.replaceChildren(...Object.entries(payload).filter(([k]) => k !== "PM (LEAD)" && k !== "TRIBE").flatMap(([k, v]) => {
         const text = Array.isArray(v) ? v.map(x => (x && x.id ? names.get(x.id) || x.id : String(x))).join(", ")
                    : v && typeof v === "object" ? v.text || v.link
-                   : k.startsWith("Event ") ? fmt.dayOnly(v) : String(v);
+                   : k.startsWith("Event ") ? dayOnly(v) : String(v);
         return [h("dt", null, k), h("dd", { class: text.length > 140 || text.includes("\n") ? "is-long" : "" }, text)];
       }));
     };
@@ -657,7 +655,7 @@ export function createInbox(ctx) {
       const change = collectionsChange(c, ch, opts, RULES);
       const [title, label] = verbs(c, change.action, ch.invalid);
       $("#sheetTitle").textContent = title;
-      if (!sheet.busy) go.querySelector(".btn-label").textContent = label;
+      if (!sheet.busy) go.querySelector(".label").textContent = label;
       flow.replaceChildren(...flowEl(c, ch.targetId, ch.invalid));
       arField.hidden = change.mode !== "create";
       details.hidden = c.step !== "approved";
@@ -690,7 +688,7 @@ export function createInbox(ctx) {
     const ar = h("input", { type: "text", id: "sheetAr", autocomplete: "off" });
     ar.value = ch.arName;
     ar.addEventListener("input", () => { ch.arName = ar.value; refresh(); });
-    arField.replaceChildren(h("label", { class: "label", for: "sheetAr" }, "AR Name"), ar);
+    arField.replaceChildren(h("label", { class: "field-label", for: "sheetAr" }, "AR Name"), ar);
 
     // Invoice details, once the request is approved and the invoice issued (optional;
     // they can also be added later from the Collections pane).
@@ -715,7 +713,7 @@ export function createInbox(ctx) {
         text("sheetInvNo", "invoiceNo", "Invoice Number", "e.g. INV-1680"),
         text("sheetSiNo", "siNo", "SI Number", "e.g. 610"),
         fieldEl("Invoice Date", true, date, "sheetInvDate"),
-        h("div", { class: "field" }, h("span", { class: "label" }, "Invoice", h("em", null, " (optional)")), list,
+        h("div", { class: "field" }, h("span", { class: "field-label" }, "Invoice", h("em", null, " (optional)")), list,
           h("label", { class: "btn btn-sm file-btn" }, ic("plus"), "Add a file", input),
           h("p", { class: "set-sub" }, "PDF or image, up to 10 MB each. Uploaded when you push.")));
       details.style.gap = "12px";
@@ -740,11 +738,11 @@ export function createInbox(ctx) {
     if (ch.invoiceDate) out["Invoice Date"] = ch.invoiceDate;   // already midnight Manila
     const todo = ch.files.filter(f => !f.file_token);
     for (let i = 0; i < todo.length; i++) {
-      go.querySelector(".btn-label").textContent = todo.length > 1 ? `Uploading ${i + 1} of ${todo.length}…` : "Uploading…";
+      go.querySelector(".label").textContent = todo.length > 1 ? `Uploading ${i + 1} of ${todo.length}…` : "Uploading…";
       todo[i].file_token = await uploadToBase(todo[i].file, ctx.tables.collections.app, ctx.token());
     }
     if (ch.files.length) out["Invoice"] = ch.files.map(f => ({ file_token: f.file_token }));
-    go.querySelector(".btn-label").textContent = "Pushing…";
+    go.querySelector(".label").textContent = "Pushing…";
     return out;
   }
 
@@ -791,7 +789,7 @@ export function createInbox(ctx) {
         s.done = true;
         S.drafts.delete(draftKey(c) + (s.invalid ? ":invalid" : ""));
         dialog.close();
-        toast(err.message, { type: "warn", detail: err.detail || "Someone else already did this. The list has been refreshed." });
+        toast(err.message, { type: "info", detail: err.detail || "Someone else already did this. The list has been refreshed." });
         ctx.loadData({ quiet: true });
         return;
       }
@@ -799,7 +797,7 @@ export function createInbox(ctx) {
       const box = $("#sheetError");
       box.textContent = `Nothing was written. ${describe(err)}`;
       box.hidden = false;
-      go.querySelector(".btn-label").textContent = conn.proxy === "down" ? "Try again" : go.querySelector(".btn-label").textContent;
+      go.querySelector(".label").textContent = conn.proxy === "down" ? "Try again" : go.querySelector(".label").textContent;
     }
   }
 
@@ -836,7 +834,7 @@ export function createInbox(ctx) {
     const chosen = [...selected];
     const input = h("input", { type: "text", id, autocomplete: "off", placeholder, role: "combobox",
                                "aria-autocomplete": "list", "aria-expanded": "false" });
-    const chips = h("span", { class: "chips", style: "display:contents" });
+    const chips = h("span", { class: "picker-chips" });
     const box = h("div", { class: "picker-box", onclick: () => input.focus() }, chips, input);
     const list = h("ul", { class: "suggest", role: "listbox", hidden: true });
     const wrap = h("div", { class: "picker" }, box, list);
