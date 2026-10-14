@@ -90,6 +90,33 @@ export function dayStart(ms, offsetHours) {
 }
 export const yearIn = (ms, offsetHours) => new Date(ms + offsetHours * 3600000).getUTCFullYear();
 
+/* A typed date → midnight of that day in the given UTC offset (Lark's date-only
+   format). Accepts 2026-10-14, 2026/10/14, 10/14/2026 (month first, unless the
+   first number can only be a day), Oct 14, 2026, 14 October 2026 and Oct 14
+   (this year). Returns null for an empty text and NaN for one that isn't a date. */
+const MONTH_NAMES = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+export function parseDay(text, offsetHours, now = Date.now()) {
+  const s = String(text || "").trim().toLowerCase().replace(/,/g, " ").replace(/\s+/g, " ");
+  if (!s) return null;
+  let y, m, d, x;
+  if ((x = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/))) [y, m, d] = [+x[1], +x[2], +x[3]];
+  else if ((x = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/))) {
+    [m, d, y] = [+x[1], +x[2], +x[3]];
+    if (m > 12 && d <= 12) [m, d] = [d, m];
+  } else {
+    // "oct", "octo", "october" (and "sept"), but not "octember"
+    const word = (w) => (w.length < 3 ? 0 : MONTH_NAMES.findIndex(n => n.startsWith(w)) + 1);
+    const thisYear = new Date(now + offsetHours * 3600000).getUTCFullYear();
+    if ((x = s.match(/^([a-z]+)\.? (\d{1,2})(?:st|nd|rd|th)?(?: (\d{4}))?$/)) && word(x[1])) [m, d, y] = [word(x[1]), +x[2], x[3] ? +x[3] : thisYear];
+    else if ((x = s.match(/^(\d{1,2})(?:st|nd|rd|th)? ([a-z]+)\.?(?: (\d{4}))?$/)) && word(x[2])) [d, m, y] = [+x[1], word(x[2]), x[3] ? +x[3] : thisYear];
+    else return NaN;
+  }
+  const t = Date.UTC(y, m - 1, d);
+  const back = new Date(t);
+  if (back.getUTCFullYear() !== y || back.getUTCMonth() !== m - 1 || back.getUTCDate() !== d || y < 1900) return NaN;
+  return t - offsetHours * 3600000;
+}
+
 /* Single-select options are matched loosely ("PDEI - Event Service" fits the
    option "PDEI-Event Service") but always written using the option's own name,
    so a write can never create a new option. */
@@ -423,7 +450,11 @@ export function pmPool(andon, universe) {
 export function isBlank(v) {
   if (v === null || v === undefined) return true;
   if (typeof v === "string") return !v.trim();
-  if (Array.isArray(v)) return !v.length || plain(v).trim() === "";
+  if (Array.isArray(v)) {
+    return v.every(x => x === null || x === undefined || x === ""
+      || (typeof x === "object" && !x.id && !x.file_token && plain(x).trim() === ""));
+  }
+  if (typeof v === "number") return Number.isNaN(v);
   if (typeof v === "object" && "value" in v) return isBlank(v.value);
   if (typeof v === "object" && "link" in v) return !v.link;
   return false;
@@ -510,13 +541,18 @@ export function auditCards(target, records, briefs, rules, { hide = new Set(), o
 }
 
 /* The cells a push writes: the chosen gaps (`choices.fields`, default all),
-   valued from the brief. `choices.vat` = the VAT rate when the row has none
-   (then VAT% is written with the amount). */
+   valued from the brief unless edited in the sheet (`choices.values`, in write
+   format: briefs go out of date). A value left blank is never written.
+   `choices.vat` = the VAT rate when the row has none (then VAT% is written with the amount). */
 export function auditPatch(card, row, choices, rules, { options, fields } = {}) {
   const want = fromBrief(card.target, card.brief, row, rules, { vat: choices.vat, options, fields });
   const pick = choices.fields || card.gaps;
   const out = {};
-  for (const k of pick) if (card.gaps.includes(k) && k in want) out[k] = want[k];
+  for (const k of pick) {
+    if (!card.gaps.includes(k)) continue;
+    const v = choices.values && k in choices.values ? choices.values[k] : want[k];
+    if (!isBlank(v)) out[k] = typeof v === "string" ? v.replace(/\r\n?/g, "\n").trim() : v;
+  }
   if (card.needsVat && "Amount (VAT-Ex.) (PHP)" in out) out["VAT%"] = choices.vat || defaultVat(card.brief.currency);
   return out;
 }

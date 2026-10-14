@@ -9,7 +9,7 @@ import {
   indexUniverse, indexCollections, briefCards, parCards, collectionCards, collectionsChange,
   universeFromBrief, verifyWritten, similarity, vatMentions,
   peoplePool, universeView, shortName, andonFromBrief, collectionsView, collectionRow, invoiceDetailsPatch,
-  auditCards, auditPatch,
+  auditCards, auditPatch, parseDay,
 } from "../js/sync.js";
 import { writableOnly } from "../js/ops.js";
 
@@ -575,4 +575,35 @@ test("verifyWritten checks multi-select values (e.g. ANDON Tools) without crashi
   assert.deepEqual(verifyWritten({ "Tools": ["None"] }, { "Tools": { type: 4, value: ["None"] } }), []);
   assert.equal(verifyWritten({ "Tools": ["None"] }, { "Tools": ["Sound"] }).length, 1);
   assert.equal(verifyWritten({ "Tools": ["None"] }, {}).length, 1);
+});
+
+test("typed dates become midnight Manila; anything else is flagged", () => {
+  const oct14 = Date.UTC(2026, 9, 14) - 8 * 3600000;
+  for (const t of ["2026-10-14", "2026/10/14", "10/14/2026", "14/10/2026", "Oct 14, 2026", "October 14 2026",
+                   "14 Oct 2026", "oct. 14th, 2026", " Oct 14 2026 "]) {
+    assert.equal(parseDay(t, 8), oct14, t);
+  }
+  assert.equal(parseDay("Oct 14", 8, Date.UTC(2026, 5, 1)), oct14);     // no year: this year
+  assert.equal(parseDay("", 8), null);
+  for (const t of ["2026-02-30", "13/13/2026", "next week", "14", "Octember 14 2026"]) assert.ok(Number.isNaN(parseDay(t, 8)), t);
+});
+
+test("audit: values edited in the sheet are written instead of the brief's; blanks never are", () => {
+  const b = rec("recBE", { "Request No.": url("202601050003"), "Project Code": seg("2026TEG-P0603"), "Project Name": seg("Edit Me"),
+    "Status": "Approved", "Submitted at": 1, "Remarks": seg("Old remarks."), "MKT": [user("ou_m", "Old Mkt")],
+    "Start date": 10, "End date": 20, "Contract Value": 112, "Contract Value-Currency": "PHP" });
+  const row = rec("uE2", { "Project Code": seg("2026TEG-P0603"), "Project": seg("Edit Me"), "VAT%": "12%" });
+  const c = auditCards("universe", [row], [b], RULES).cards[0];
+  const p = auditPatch(c, row, { values: {
+    "Project Description": "  New remarks.\r\n",          // edited: trimmed, Windows line ends fixed
+    "MKT": [{ id: "ou_new" }],                             // a different person
+    "Project End": null,                                   // cleared: not written
+    "Amount (VAT-Ex.) (PHP)": 250,                         // typed over the brief's
+  } }, RULES);
+  assert.equal(p["Project Description"], "New remarks.");
+  assert.deepEqual(p["MKT"], [{ id: "ou_new" }]);
+  assert.ok(!("Project End" in p));
+  assert.equal(p["Amount (VAT-Ex.) (PHP)"], 250);
+  assert.equal(p["Project Start"], 10);                    // not edited: from the brief
+  assert.ok(!("VAT%" in p));                               // the row has one
 });

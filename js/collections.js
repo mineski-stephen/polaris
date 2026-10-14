@@ -5,7 +5,7 @@
 import { collectionsView, collectionRow, invoiceDetailsPatch, shortName } from "./sync.js";
 import { saveInvoiceDetails, loadCollections } from "./ops.js";
 import { RULES } from "./config.js";
-import { $, h, ic, fmt, flash, store, recall, toast, reduceMotion, copyable, copyableText } from "./ui.js";
+import { $, h, ic, fmt, flash, store, recall, toast, reduceMotion, copyable, copyableText, dateField } from "./ui.js";
 import { describe, isDeadToken, uploadToBase } from "./net.js";
 
 const KEY = { sort: "polaris.colSort", collapsed: "polaris.colCollapsed" };
@@ -13,9 +13,6 @@ const COLUMNS = [
   ["c-ar", "AR Name"], ["c-code", "Project Code"], ["c-amount num", "Invoice Amount"], ["c-cur", "Currency"],
   ["c-remarks", "Sales Remarks"], ["c-status", "Status"], ["c-people c-am", "AM"], ["c-act", ""],
 ];
-const DAY = 86400000, OFF = 8 * 3600000;    // date-only fields: midnight Manila
-const toInput = (ms) => (ms ? new Date(ms + OFF).toISOString().slice(0, 10) : "");
-const fromInput = (v) => (v ? Date.parse(v + "T00:00:00Z") - OFF : null);
 
 export function createCollections(ctx) {
   const { S } = ctx;
@@ -113,7 +110,7 @@ export function createCollections(ctx) {
   /* ======================= invoice details sheet ======================= */
   const dlg = $("#details");
   const save = $("#detailsSave");
-  let edit = null;   // { row, files: [{file_token?, name, size, file?}], busy }
+  let edit = null;   // { row, files: [{file_token?, name, size, file?}], date, dateOk, busy }
 
   $("#detailsCancel").addEventListener("click", () => { if (!edit || !edit.busy) dlg.close(); });
   dlg.addEventListener("cancel", (e) => { if (edit && edit.busy) e.preventDefault(); });
@@ -127,11 +124,12 @@ export function createCollections(ctx) {
   save.addEventListener("click", runSave);
 
   function openDetails(r) {
-    edit = { row: r, files: r.files.map(f => ({ ...f })), busy: false };
+    edit = { row: r, files: r.files.map(f => ({ ...f })), date: r.invoiceDate || null, dateOk: true, busy: false };
     $("#detailsSub").replaceChildren(r.arName || r.code, r.request ? [" · request ", copyable(r.request)] : "");
     $("#dInvoiceNo").value = r.invoiceNo;
     $("#dSiNo").value = r.siNo;
-    $("#dDate").value = toInput(r.invoiceDate);
+    $("#dDateBox").replaceChildren(dateField({ id: "dDate", value: edit.date,
+      onChange: (ms, ok) => { edit.date = ms; edit.dateOk = ok; } }));
     $("#detailsError").hidden = true;
     paintFiles();
     setBusy(false);
@@ -160,6 +158,11 @@ export function createCollections(ctx) {
     if (!ctx.ensureTime()) return;
     const e = edit, r = e.row;
     $("#detailsError").hidden = true;
+    if (!e.dateOk) {
+      $("#detailsError").textContent = "Invoice Date isn't a date Polaris can read. Try Oct 14, 2026, or double-click it to pick one.";
+      $("#detailsError").hidden = false;
+      return;
+    }
     try {
       // Upload new files first (each once: a retry reuses tokens already returned).
       const fresh = e.files.filter(f => f.file && !f.file_token);
@@ -170,7 +173,7 @@ export function createCollections(ctx) {
       setBusy(true, "Saving…");
       const patch = invoiceDetailsPatch(r, {
         invoiceNo: $("#dInvoiceNo").value, siNo: $("#dSiNo").value,
-        invoiceDate: fromInput($("#dDate").value), files: e.files,
+        invoiceDate: e.date, files: e.files,
       });
       if (!Object.keys(patch).length) { setBusy(false); dlg.close(); toast("Nothing changed."); return; }
       const res = await saveInvoiceDetails(ctx.call, ctx.tables, r.id, patch);

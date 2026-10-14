@@ -7,6 +7,7 @@ const svg = (d) =>
 export const ICONS = {
   alert: svg('<path d="M10.3 3.9 2.4 17.5A2 2 0 0 0 4.1 20.5h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9.5v4M12 17h.01"/>'),
   arrowLeft: svg('<path d="M19 12H5m0 0 6.5 6.5M5 12l6.5-6.5"/>'),
+  calendar: svg('<rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/>'),
   caret: svg('<path d="m6 9 6 6 6-6"/>'),
   check: svg('<path d="M20 6 9 17l-5-5"/>'),
   clock: svg('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),

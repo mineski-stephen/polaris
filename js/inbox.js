@@ -7,7 +7,7 @@ import {
   universeFromBrief, collectionsChange, stepStatus, parAfterAdding, defaultVat, amountFormula, vatMentions,
   vatExAmount, people, andonFromBrief, auditPatch,
 } from "./sync.js";
-import { $, h, ic, toast, fmt, flash, reduceMotion, copyable, copyableText, store } from "./ui.js";
+import { $, h, ic, toast, fmt, flash, reduceMotion, copyable, copyableText, store, dateField } from "./ui.js";
 import { describe, isDeadToken, conn, uploadToBase } from "./net.js";
 
 const NOUN = { brief: "briefs", par: "PARs", invoice: "invoices", andon: "briefs for ANDON", audit: "projects with blanks" };
@@ -315,48 +315,135 @@ export function createInbox(ctx) {
       detail: "Only on this device. It comes back if another cell goes blank." });
   }
 
+  /* The fill sheet: every blank with an editor, pre-filled from the brief (which
+     may be out of date). Ticked ones are written; editing one ticks it. */
   function buildAudit(body, c) {
     const ch = sheet.choices;
     const row = auditRow(c);
+    const opts = auditOpts(c);
+    const types = new Map(ctx.fieldsOf(c.target).map(f => [f.field_name, f.type]));
+    const selects = ctx.optionsOf(c.target);
+    const AMOUNT = "Amount (VAT-Ex.) (PHP)";
+    // Names for people shown in "Will be written" (the brief's, plus anyone picked here).
+    ch.names = ch.names || new Map();
+    for (const f of ["AM", "MKT", "BD"]) people(c.brief.record.fields[f]).forEach(u => ch.names.set(u.id, u.name));
+    const fromBrief = () => auditPatch(c, row, { fields: c.gaps, vat: ch.vat }, RULES, opts);
+    if (!ch.values) ch.values = { ...fromBrief() };
+    ch.edited = ch.edited || [];
+    ch.bad = ch.bad || [];
+
     const written = h("dl", { class: "written" });
     const vatBox = h("div", { class: "field" });
+    const show = (k, v) => {
+      if (Array.isArray(v)) return v.map(x => (x && x.id ? ch.names.get(x.id) || x.id : String(x))).join(", ");
+      if (AUDIT_DATES.has(k)) return fmt.dayOnly(v);
+      if (k === AMOUNT) return fmt.peso(v);
+      return String(v);
+    };
     const refresh = () => {
-      const patch = auditPatch(c, row, ch, RULES, auditOpts(c));
+      const patch = auditPatch(c, row, ch, RULES, opts);
       const n = Object.keys(patch).length;
-      sheet.blocked = n ? "" : "Pick at least one field to fill.";
+      const bad = ch.bad.filter(k => ch.fields.includes(k));
+      sheet.blocked = bad.length ? `Check ${bad.join(", ")}: ${bad.length === 1 ? "it isn't" : "they aren't"} valid yet.`
+        : n ? "" : "Tick at least one field to fill.";
       go.disabled = sheet.busy || !!sheet.blocked;
       if (!sheet.busy) go.querySelector(".btn-label").textContent = n ? `Fill ${n} field${n === 1 ? "" : "s"}` : "Fill";
-      vatBox.hidden = !(c.needsVat && ch.fields.includes("Amount (VAT-Ex.) (PHP)"));
+      blockNote.hidden = !sheet.blocked || !n;
+      blockNote.textContent = sheet.blocked;
+      vatBox.hidden = !(c.needsVat && ch.fields.includes(AMOUNT));
       written.replaceChildren(...Object.entries(patch).flatMap(([k, v]) => [h("dt", null, k),
-        h("dd", { class: String(v).length > 140 ? "is-long" : "" }, auditText(c, k, v), h("span", { class: "why" }, "Was blank."))]));
+        h("dd", { class: String(v).length > 140 ? "is-long" : "" }, show(k, v),
+          h("span", { class: "why" }, ch.edited.includes(k) ? "Was blank. Edited here." : "Was blank. From the brief."))]));
     };
     sheet.refresh = refresh;
-    const want = auditPatch(c, row, { fields: c.gaps, vat: ch.vat }, RULES, auditOpts(c));
-    const boxes = h("div", { class: "checks" }, c.gaps.map((k) => {
-      const box = h("input", { type: "checkbox", id: `gap-${k}` });
+    const blockNote = h("p", { class: "note", role: "status", hidden: true });
+
+    // One row per blank: tick box, name, and an editor that fits the column.
+    const tick = {};
+    const changed = (k, v, ok = true) => {
+      ch.values[k] = v;
+      if (!ch.edited.includes(k)) ch.edited.push(k);
+      ch.bad = ok ? ch.bad.filter(x => x !== k) : [...new Set([...ch.bad, k])];
+      if (!ch.fields.includes(k)) { ch.fields.push(k); tick[k].checked = true; }
+      refresh();
+    };
+    let amountInput = null;
+    const editor = (k) => {
+      const id = `gap-v-${k.replace(/\W+/g, "-")}`;
+      const v = ch.values[k];
+      const type = types.get(k) || (AUDIT_DATES.has(k) ? 5 : 1);
+      if (type === 5) return dateField({ id, value: v ?? null, onChange: (ms, ok) => changed(k, ms, ok) });
+      if (type === 11) {
+        const chosen = (Array.isArray(v) ? v : []).map(u => ({ id: u.id, name: ch.names.get(u.id) || u.id, email: "" }));
+        const pool = c.target === "andon" ? [...(S.pmPool || []), ...S.pool] : S.pool;
+        return peoplePicker({ id, selected: chosen, pool: [...new Map(pool.map(p => [p.id, p])).values()],
+          placeholder: "Add someone", single: c.target === "andon" && k === "AM", head: "Frequent people",
+          onChange: (list) => { list.forEach(u => ch.names.set(u.id, u.name)); changed(k, list.map(u => ({ id: u.id }))); } });
+      }
+      if (type === 3) {
+        const sel = h("select", { id }, h("option", { value: "" }, "Not set"), (selects[k] || []).map(o => h("option", { value: o }, o)));
+        sel.value = v || "";
+        sel.addEventListener("change", () => changed(k, sel.value || null));
+        return h("label", { class: "select" }, sel);
+      }
+      if (type === 4) {
+        const now = new Set(Array.isArray(v) ? v : []);
+        return h("div", { class: "toggles", role: "group", "aria-label": k }, (selects[k] || []).map(o =>
+          h("button", { type: "button", "aria-pressed": String(now.has(o)), onclick: (e) => {
+            if (now.has(o)) now.delete(o); else now.add(o);
+            e.currentTarget.setAttribute("aria-pressed", String(now.has(o)));
+            changed(k, [...now]);
+          } }, o)));
+      }
+      if (type === 2) {
+        const el = h("input", { type: "text", id, inputmode: "decimal", autocomplete: "off" });
+        el.value = v ?? "";
+        el.addEventListener("input", () => {
+          const t = el.value.replace(/[₱,\s]/g, "");
+          const n = t === "" ? null : Number(t);
+          el.setAttribute("aria-invalid", String(Number.isNaN(n)));
+          changed(k, Number.isNaN(n) ? null : n, !Number.isNaN(n));
+        });
+        if (k === AMOUNT) amountInput = el;
+        return el;
+      }
+      const long = /description|remarks/i.test(k) || String(v || "").length > 60;
+      const el = h(long ? "textarea" : "input", long ? { id, rows: "3" } : { type: "text", id, autocomplete: "off" });
+      el.value = v ?? "";
+      el.addEventListener("input", () => changed(k, el.value));
+      return el;
+    };
+    const rows = c.gaps.map((k) => {
+      const box = h("input", { type: "checkbox", id: `gap-${k.replace(/\W+/g, "-")}`, "aria-label": `Fill ${k}` });
       box.checked = ch.fields.includes(k);
+      tick[k] = box;
       box.addEventListener("change", () => {
         ch.fields = box.checked ? [...ch.fields, k] : ch.fields.filter(x => x !== k);
         refresh();
       });
-      const text = k in want ? auditText(c, k, want[k]) : "";
-      return h("label", { class: "check", for: `gap-${k}` }, box,
-        h("span", null, h("b", null, k), h("small", null, text.length > 90 ? text.slice(0, 90) + "…" : text)));
-    }));
+      return h("div", { class: "gap" },
+        h("label", { class: "gap-head", for: box.id }, box, h("b", null, k)),
+        editor(k));
+    });
     if (c.needsVat) {
       const seg = h("div", { class: "seg", role: "radiogroup", "aria-label": "VAT" },
         ["12%", "0%"].map(v => h("button", { type: "button", role: "radio", "aria-checked": String(ch.vat === v), onclick: (e) => {
           ch.vat = v;
           for (const b of e.currentTarget.parentElement.children) b.setAttribute("aria-checked", String(b.textContent === v));
+          // An amount still as the brief has it follows the VAT; one typed in stays.
+          if (!ch.edited.includes(AMOUNT) && amountInput) {
+            ch.values[AMOUNT] = fromBrief()[AMOUNT];
+            amountInput.value = ch.values[AMOUNT] ?? "";
+          }
           refresh();
         } }, v)));
       vatBox.replaceChildren(h("span", { class: "label" }, "VAT"), seg,
         h("p", { class: "set-sub" }, "The row has no VAT%, so the amount needs one. It's written to VAT% too."));
     }
     put(body,
-      h("p", { class: "set-sub" }, copyableText(`Blank in the ${AUDIT_WHERE[c.target]} row, filled from brief ${c.requestNo}. ` +
-        "Cells that have a value are never changed.")),
-      h("p", { class: "subhead" }, "Fill"), boxes, vatBox,
+      h("p", { class: "set-sub" }, copyableText(`Blank in the ${AUDIT_WHERE[c.target]} row. Filled in from brief ${c.requestNo}; ` +
+        "change anything that's out of date. Cells that have a value are never changed.")),
+      h("div", { class: "gaps" }, rows), vatBox, blockNote,
       h("p", { class: "subhead" }, "Will be written"), written);
     refresh();
   }
@@ -364,10 +451,10 @@ export function createInbox(ctx) {
   function defaults(c) {
     if (c.kind === "brief") return { vat: defaultVat(c.currency), client: "", bd: [], otherLinks: "", showLinks: false };
     if (c.kind === "invoice") {
-      return { targetId: c.target, arName: c.name, invoiceNo: "", siNo: "", invoiceDate: "", files: [], showDetails: false };
+      return { targetId: c.target, arName: c.name, invoiceNo: "", siNo: "", invoiceDate: null, invoiceDateOk: true, files: [], showDetails: false };
     }
     if (c.kind === "andon") return { pm: [], tribe: "" };
-    if (c.kind === "audit") return { fields: [...c.gaps], vat: defaultVat(c.brief.currency) };
+    if (c.kind === "audit") return { fields: [...c.gaps], vat: defaultVat(c.brief.currency), values: null, edited: [], bad: [] };
     return {};
   }
 
@@ -574,7 +661,8 @@ export function createInbox(ctx) {
       flow.replaceChildren(...flowEl(c, ch.targetId, ch.invalid));
       arField.hidden = change.mode !== "create";
       details.hidden = c.step !== "approved";
-      sheet.blocked = change.mode === "create" && !ch.invalid ? c.noNew : "";
+      sheet.blocked = (change.mode === "create" && !ch.invalid ? c.noNew : "")
+        || (ch.invoiceDateOk === false ? "Invoice Date isn't a date Polaris can read. Try Oct 14, 2026, or double-click it to pick one." : "");
       blockNote.hidden = !sheet.blocked;
       blockNote.textContent = sheet.blocked;
       go.disabled = sheet.busy || !!sheet.blocked;
@@ -613,9 +701,8 @@ export function createInbox(ctx) {
         el.addEventListener("input", () => { ch[key] = el.value; });
         return fieldEl(label, true, el, id);
       };
-      const date = h("input", { type: "date", id: "sheetInvDate" });
-      date.value = ch.invoiceDate;
-      date.addEventListener("input", () => { ch.invoiceDate = date.value; });
+      const date = dateField({ id: "sheetInvDate", value: ch.invoiceDate,
+        onChange: (ms, ok) => { ch.invoiceDate = ms; ch.invoiceDateOk = ok; refresh(); } });
       const list = h("ul", { class: "files" });
       const paint = () => list.replaceChildren(...ch.files.map((f, i) => h("li", null, ic("link"),
         h("span", null, f.name, ` (${Math.max(1, Math.round(f.size / 1024)).toLocaleString()} KB)`),
@@ -650,7 +737,7 @@ export function createInbox(ctx) {
     const out = {};
     if (ch.invoiceNo.trim()) out["Invoice Number"] = ch.invoiceNo.trim();
     if (ch.siNo.trim()) out["SI Number"] = ch.siNo.trim();
-    if (ch.invoiceDate) out["Invoice Date"] = Date.parse(ch.invoiceDate + "T00:00:00Z") - 8 * 3600000;   // midnight Manila
+    if (ch.invoiceDate) out["Invoice Date"] = ch.invoiceDate;   // already midnight Manila
     const todo = ch.files.filter(f => !f.file_token);
     for (let i = 0; i < todo.length; i++) {
       go.querySelector(".btn-label").textContent = todo.length > 1 ? `Uploading ${i + 1} of ${todo.length}…` : "Uploading…";

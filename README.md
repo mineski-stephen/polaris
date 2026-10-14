@@ -219,8 +219,11 @@ Project Description, start and end dates, RFP Received Date and Year for the
 Universe; the typed ANDON columns (AM, MKT (PITCH), Business Unit, Tools, Event
 Start / End…) for ANDON.
 
-- **Fill** shows each blank with the brief's value; untick any you'd rather leave.
-  If the amount is blank and the row has no VAT%, pick the VAT (it's written to VAT% too).
+- **Fill** shows each blank with an editor, pre-filled from the brief. Briefs go
+  out of date, so change anything before pushing (text, amounts, dates, people,
+  Business Unit, Tools); untick any you'd rather leave blank. The sheet says which
+  values are from the brief and which you edited. If the amount is blank and the
+  row has no VAT%, pick the VAT (it's written to VAT% too).
 - Only blank cells are ever written. The row is re-read just before writing: a
   cell someone filled meanwhile is left alone, then everything written is read back.
 - Never audited: what a person decides (Client, BD, Other Links, Status, Mancom
@@ -259,6 +262,11 @@ failed upload writes nothing). Otherwise add them later with the **+** (or the
 pencil, to edit) on the Collections row: the sheet saves only what you changed, uploads files
 first (PDF or image, up to 10 MB each, the most the connection service takes),
 then reads the row back to confirm. Clearing a field empties it in Lark.
+
+**Dates.** Every date field takes a typed date (*Oct 14, 2026*, *2026-10-14*,
+*10/14/2026*, *14 Oct*…) or opens a calendar on a double-click (or the calendar
+button, handy on phones). A date Polaris can't read is outlined in red and blocks
+the push until it's fixed.
 
 **Click to copy.** Request numbers, project codes, PAR numbers, invoice numbers and
 SI numbers copy to the clipboard when clicked: on cards (including inside notes),
