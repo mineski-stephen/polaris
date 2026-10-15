@@ -160,7 +160,7 @@ export function createCollections(ctx) {
 
   function paintFiles() {
     $("#dFiles").replaceChildren(...edit.files.map((f, i) => h("li", null, ic("link"),
-      h("span", null, f.name, f.size ? ` (${Math.max(1, Math.round(f.size / 1024)).toLocaleString()} KB)` : ""),
+      h("span", { class: "file-name" }, f.name, f.size ? [" ", h("span", { class: "file-size" }, `(${Math.max(1, Math.round(f.size / 1024)).toLocaleString()} KB)`)] : ""),
       f.file ? h("span", { class: "is-new-file" }, "new") : null,
       h("button", { type: "button", "aria-label": `Remove ${f.name}`, title: "Remove", onclick: () => { edit.files.splice(i, 1); paintFiles(); } }, ic("x")))));
   }

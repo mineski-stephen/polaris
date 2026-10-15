@@ -703,7 +703,7 @@ export function createInbox(ctx) {
         onChange: (ms, ok) => { ch.invoiceDate = ms; ch.invoiceDateOk = ok; refresh(); } });
       const list = h("ul", { class: "files" });
       const paint = () => list.replaceChildren(...ch.files.map((f, i) => h("li", null, ic("link"),
-        h("span", null, f.name, ` (${Math.max(1, Math.round(f.size / 1024)).toLocaleString()} KB)`),
+        h("span", { class: "file-name" }, f.name, " ", h("span", { class: "file-size" }, `(${Math.max(1, Math.round(f.size / 1024)).toLocaleString()} KB)`)),
         h("button", { type: "button", "aria-label": `Remove ${f.name}`, onclick: () => { ch.files.splice(i, 1); paint(); } }, ic("x")))));
       const input = h("input", { type: "file", multiple: true, hidden: true });
       input.addEventListener("change", () => { for (const file of input.files) ch.files.push({ name: file.name, size: file.size, file }); input.value = ""; paint(); });

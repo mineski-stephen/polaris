@@ -62,7 +62,9 @@ main { padding-bottom: 120px; }
 .files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .files li { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; border: 1px solid var(--line); border-radius: var(--r-sm);
             font-size: 13.5px; background: var(--surface-2); }
-.files li span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+/* Only the name grows (icons are spans too, so never a bare `li span` here). */
+.files .file-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.files .file-size { color: var(--muted); }
 .files li .is-new-file { font-size: 12px; color: var(--brand-text); font-weight: 700; }
 .files li button { display: inline-flex; padding: 4px; border: 0; background: none; color: var(--muted); border-radius: var(--r-xs); }
 .files li button:hover { color: var(--danger); }
