@@ -5,7 +5,7 @@
    runs as the signed-in person. Lark gives about 2 hours; there is no refresh
    token, so after that the user logs in again. */
 
-import { lark, LarkError, viaProxy } from "./net.js";
+import { lark, LarkError, viaProxy, wake } from "./net.js";
 import { store, recall } from "./ui.js";
 
 export const APP_ID = "cli_aab0716138b8ded3";
@@ -79,7 +79,11 @@ export async function finishLogin(params) {
     return { ok: false, returnTo, message: "That login started in another tab. Log in again here." };
   }
   try {
-    const j = await lark("POST", `${OPEN_API}/authen/v2/oauth/token`, { body: {
+    // The proxy may have fallen asleep while the person was on Lark's page: wait
+    // for it first (the busy screen says so), then give the exchange a time limit
+    // so a stuck connection ends in a message instead of an endless spinner.
+    if (!await wake()) throw new LarkError("connection service unreachable", { network: true });
+    const j = await lark("POST", `${OPEN_API}/authen/v2/oauth/token`, { timeout: 45000, body: {
       grant_type: "authorization_code",
       client_id: APP_ID,                 // no client_secret: the proxy adds it
       code: params.get("code"),

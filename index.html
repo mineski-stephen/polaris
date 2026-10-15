@@ -92,7 +92,7 @@
     <!-- Finishing a login -------------------------------------------------------->
     <section class="view view-busy" data-view="busy">
       <span class="spinner" aria-hidden="true"></span>
-      <p>Logging you in…</p>
+      <p id="busyMsg">Logging you in…</p>
     </section>
 
     <!-- Inbox + Universe ------------------------------------------------------->
@@ -258,7 +258,8 @@
           <input type="text" id="dInvoiceNo" autocomplete="off" placeholder="e.g. INV-1680"></div>
         <div class="field"><label class="field-label" for="dSiNo">SI Number <em>(optional)</em></label>
           <input type="text" id="dSiNo" autocomplete="off" placeholder="e.g. 610"></div>
-        <div class="field"><label class="field-label" for="dDate">Invoice Date <em>(optional)</em></label>
+        <div class="field"><!-- linked to its input (for="dDate") once the date field is built -->
+        <label class="field-label" id="dDateLabel">Invoice Date <em>(optional)</em></label>
           <div id="dDateBox"></div></div>
         <div class="field"><span class="field-label">Invoice <em>(optional)</em></span>
           <ul class="files" id="dFiles"></ul>

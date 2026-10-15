@@ -150,6 +150,7 @@ export function createCollections(ctx) {
     $("#dSiNo").value = r.siNo;
     $("#dDateBox").replaceChildren(dateField({ id: "dDate", value: edit.date,
       onChange: (ms, ok) => { edit.date = ms; edit.dateOk = ok; } }));
+    $("#dDateLabel").htmlFor = "dDate";
     $("#detailsError").hidden = true;
     paintFiles();
     setBusy(false);

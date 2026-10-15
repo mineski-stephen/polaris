@@ -40,25 +40,32 @@ function setConn(patch) {
   listeners.forEach(fn => fn(conn));
 }
 
+/* `timeout` (ms) gives up on a request that never answers (a stuck connection
+   to a sleeping proxy can otherwise wait forever). Only for calls where giving
+   up is safe: reads, wake-up pings and the login code exchange, not writes. */
 let quickFails = 0;
-async function send(url, init) {
+async function send(url, init, timeout = 0) {
   const started = performance.now();
+  const ctl = timeout ? new AbortController() : null;
+  const timer = ctl && setTimeout(() => ctl.abort(), timeout);
   try {
-    const res = await fetch(url, init);
+    const res = await fetch(url, ctl ? { ...init, signal: ctl.signal } : init);
     quickFails = 0;
     return res;
   } catch (e) {
     if (performance.now() - started < 600 && navigator.onLine !== false && ++quickFails >= 2) {
       setConn({ proxy: "down", blocked: true, detail: "blocked by this browser" });
     }
-    throw new LarkError(e.message, { network: true });
+    throw new LarkError(ctl && ctl.signal.aborted ? "no answer in time" : e.message, { network: true });
+  } finally {
+    clearTimeout(timer);
   }
 }
 
 /* One Lark call through the proxy. Resolves with the JSON body; throws LarkError
    carrying {network | status, json | raw}. `read` calls are retried while the
    proxy wakes up (and once after a rate limit). */
-export async function lark(method, url, { token, body, read = false } = {}) {
+export async function lark(method, url, { token, body, read = false, timeout = 0 } = {}) {
   const init = { method, headers: {} };
   if (token) init.headers.Authorization = "Bearer " + token;
   if (method !== "GET") {
@@ -69,7 +76,7 @@ export async function lark(method, url, { token, body, read = false } = {}) {
   for (let attempt = 0; ; attempt++) {
     let res;
     try {
-      res = await send(viaProxy(url), init);
+      res = await send(viaProxy(url), init, timeout);
     } catch (e) {
       if (conn.blocked || attempt >= waits.length) throw e;
       setConn({ proxy: "waking", detail: "" });
@@ -134,7 +141,7 @@ export function wake() {
     try {
       for (;;) {
         try {
-          const res = await send(proxyBase() + "/", { method: "GET" });
+          const res = await send(proxyBase() + "/", { method: "GET" }, 20000);
           if (res.ok) { setConn({ proxy: "awake", blocked: false, detail: "" }); return true; }
           if (res.status < 500) { setConn({ proxy: "down", detail: `answered HTTP ${res.status}` }); return false; }
         } catch (e) {

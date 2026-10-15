@@ -521,6 +521,11 @@ onConn(() => {
   $("#blockNote").hidden = !conn.blocked;
   $("#blockHost").textContent = proxyHost();
   if (S.view === "settings") renderSettings();
+  if (S.view === "busy") {
+    $("#busyMsg").textContent = conn.proxy === "waking"
+      ? "Logging you in… Waking up the connection service, which can take up to a minute."
+      : "Logging you in…";
+  }
   if (S.view === "work" && S.loading) { inbox.renderLoader(); universe.renderLoader(); }
 });
 window.addEventListener("hashchange", onRoute);
@@ -540,6 +545,9 @@ setInterval(tickSession, 20000);
   if (params.has("code") || params.has("error")) {
     S.view = "busy";
     render();
+    // The code is single-use: take it out of the address now, so a reload while
+    // this runs starts over cleanly instead of replaying a spent code.
+    history.replaceState(null, "", location.pathname + location.hash);
     const res = await auth.finishLogin(params);
     history.replaceState(null, "", location.pathname + (res.returnTo && res.returnTo !== "#/" ? res.returnTo : "#/briefs"));
     if (!res.ok) S.loginNote = res.message || describe(res.err);
