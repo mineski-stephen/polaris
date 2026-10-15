@@ -60,7 +60,7 @@ phone and on a PC, and every change is made as you, with your own Lark login.
 5. On a wide screen the **Universe** table sits beside the cards, so you can watch
    a pushed brief land (it glows briefly). On a phone, open the **Universe** tab
    or tap **View** in the message after a push.
-6. **Settings** (the gear beside your picture): your login, Light / Dark / System
+6. **Settings** (the gear next to **Data Audit** in the top bar): your login, Light / Dark / System
    theme, and connection status. **This browser > Clear local data** forgets the
    audit cards you hid and how the tables are sorted and folded (your login and
    theme stay); **Undo** in the message puts them back.

@@ -6,8 +6,9 @@
    audit → date field → responsive → print
    ========================================================================== */
 
-:root { --maxw: 1600px; }   /* the workspace: inbox and table side by side */
-
+/* The top bar and every view share the family's 1200px (--maxw). The one
+   exception is the side-by-side workspace (≥1280px, below), which may grow to
+   1600px so the Universe table has room; the top bar stays at 1200px. */
 main { padding-bottom: 120px; }
 
 /* ---- workspace: tabs, inbox pane, table pane ------------------------------ */
@@ -136,7 +137,7 @@ main { padding-bottom: 120px; }
     height: calc(100dvh - var(--topbar) - 40px);
   }
   .view.workspace.active { display: grid; }
-  main:has(.workspace.active) { padding-bottom: 20px; }
+  main:has(.workspace.active) { padding-bottom: 20px; max-width: 1600px; }
   .tabs { grid-area: tabs; position: static; margin: 0; }
   .tab-universe { display: none; }
   .pane-inbox { grid-area: inbox; overflow: auto; padding: 2px 6px 24px 2px; margin: -2px -6px 0 -2px; scrollbar-gutter: stable; }

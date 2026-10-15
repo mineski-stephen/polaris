@@ -111,7 +111,7 @@ function onRoute() {
     else if (r === "collections") { S.show = "universe"; S.tab = "invoice"; }
     else { S.tab = r; S.show = "inbox"; store("local", KEY.tab, r); }
   }
-  $("#settingsBack").href = S.lastWork || "#/briefs";
+  $("#workLink").href = S.lastWork || "#/briefs";
   render();
   // Load as soon as there's a login, whatever page this is, so the lists are ready.
   if (auth.currentToken() && !S.data && !S.loading && !S.loadError) loadData();
@@ -162,7 +162,10 @@ function renderHeader() {
   $("#overrideBadge").hidden = !proxyOverride();
   $("#sessionPill").hidden = !signedIn;
   $("#meLink").hidden = !signedIn;
-  $("#settingsLink").setAttribute("aria-current", S.view === "settings" ? "page" : "false");
+  $("#workLink").hidden = !signedIn;
+  for (const a of $$(".nav a")) {
+    if (a.dataset.nav === S.view) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+  }
   if (signedIn) {
     const left = auth.msLeft();
     $("#sessionLeft").textContent = fmt.duration(left);
@@ -417,7 +420,7 @@ function renderSettings() {
   } else {
     acc.replaceChildren(
       h("div", { class: "account-text" }, h("b", null, "You're not logged in."),
-        h("span", null, "A login lasts about 2 hours.")),
+        h("span", null, "Log in with Lark to see and push changes. A login lasts about 2 hours.")),
       h("div", { class: "account-actions" },
         h("button", { type: "button", class: "btn btn-sm btn-primary", onclick: () => login("#/briefs") }, "Log in with Lark")));
   }
