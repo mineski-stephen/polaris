@@ -557,6 +557,29 @@ export function auditPatch(card, row, choices, rules, { options, fields } = {}) 
   return out;
 }
 
+/* Which cells of an audit patch may still be written, given the row as Lark has it
+   now (`nowFields`): only cells that are still blank. VAT% is derived: it goes out
+   together with the amount, only if it's still blank, and if someone set a different
+   VAT% meanwhile the amount (worked out with the chosen one) is held back too.
+   Returns {written, skipped}: what to write, and the columns someone filled meanwhile. */
+export function fillPlan(patch, nowFields) {
+  const now = nowFields || {};
+  const AMOUNT = "Amount (VAT-Ex.) (PHP)";
+  const written = {}, skipped = [];
+  for (const [k, v] of Object.entries(patch)) {
+    if (k === "VAT%") continue;
+    if (isBlank(now[k])) written[k] = v; else skipped.push(k);
+  }
+  if ("VAT%" in patch) {
+    const there = clean(now["VAT%"]);
+    if (there && there !== patch["VAT%"] && AMOUNT in written) { delete written[AMOUNT]; skipped.push(AMOUNT); }
+    if (!there && AMOUNT in written) written["VAT%"] = patch["VAT%"];
+    else if (there && there !== patch["VAT%"]) skipped.push("VAT%");
+    // (blank VAT% but no amount going out: nothing derives it, so it stays blank, unreported)
+  }
+  return { written, skipped };
+}
+
 /* ======================= the Universe view ======================= */
 
 /* One Universe record as a table row. */
@@ -974,5 +997,51 @@ export function invoiceDetailsPatch(row, edit) {
   if ((edit.invoiceDate || null) !== (row.invoiceDate || null)) out["Invoice Date"] = edit.invoiceDate || null;
   const keep = (edit.files || []).map(f => f.file_token);
   if (keep.join(",") !== row.files.map(f => f.file_token).join(",")) out["Invoice"] = keep.map(t => ({ file_token: t }));
+  return out;
+}
+
+/* The cells of `patch` (Invoice Number, SI Number, Invoice Date, Invoice) that someone
+   changed in Lark since `loaded` (the row as the list showed it, collectionRow format):
+   compare it with the record just re-read. Empty when it's still safe to write. */
+export function invoiceChangedSince(patch, loaded, nowRecord) {
+  const now = collectionRow(nowRecord);
+  const tokens = (files) => files.map(f => f.file_token).join(",");
+  const out = [];
+  if ("Invoice Number" in patch && now.invoiceNo !== loaded.invoiceNo) out.push("Invoice Number");
+  if ("SI Number" in patch && now.siNo !== loaded.siNo) out.push("SI Number");
+  if ("Invoice Date" in patch && (now.invoiceDate || null) !== (loaded.invoiceDate || null)) out.push("Invoice Date");
+  if ("Invoice" in patch && tokens(now.files) !== tokens(loaded.files)) out.push("Invoice");
+  return out;
+}
+
+/* ======================= drafts (kept across a reload) ======================= */
+
+/* What was typed in a push sheet that was cancelled or interrupted, with the
+   client_token of the create, so a reload-then-retry can't add a second row.
+   Files can't be kept (they're in memory), nor can maps and sets; the rest is JSON. */
+const DRAFT_TTL_MS = 7 * 24 * 3600 * 1000;
+const DRAFT_MAX = 50;
+
+export function draftsToJSON(drafts, now = Date.now()) {
+  const keep = (k, v) => (k === "files" ? [] : v instanceof Map || v instanceof Set ? undefined : v);
+  const items = {};
+  const newest = [...drafts].sort((a, b) => ((b[1] && b[1].at) || now) - ((a[1] && a[1].at) || now)).slice(0, DRAFT_MAX);
+  for (const [key, d] of newest) {
+    if (!d || !d.clientToken) continue;
+    items[key] = { at: d.at || now, clientToken: d.clientToken, targetId: d.targetId || null,
+                   choices: JSON.parse(JSON.stringify(d.choices || {}, keep)) };
+  }
+  return { v: 1, items };
+}
+
+/* The drafts worth restoring, as [key, draft] pairs: valid, and under a week old. */
+export function draftsFromJSON(data, now = Date.now()) {
+  const out = [];
+  if (!data || data.v !== 1 || !data.items || typeof data.items !== "object") return out;
+  for (const [key, d] of Object.entries(data.items)) {
+    if (!d || typeof d.clientToken !== "string" || !d.clientToken || !d.choices || typeof d.choices !== "object") continue;
+    if (!(now - d.at <= DRAFT_TTL_MS)) continue;
+    out.push([key, { at: d.at, clientToken: d.clientToken, targetId: d.targetId || null, choices: d.choices }]);
+  }
   return out;
 }

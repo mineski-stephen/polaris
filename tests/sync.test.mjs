@@ -9,7 +9,7 @@ import {
   indexUniverse, indexCollections, briefCards, parCards, collectionCards, collectionsChange,
   universeFromBrief, verifyWritten, similarity, vatMentions,
   peoplePool, universeView, shortName, andonFromBrief, collectionsView, collectionRow, invoiceDetailsPatch,
-  auditCards, auditPatch, parseDay,
+  auditCards, auditPatch, parseDay, fillPlan, invoiceChangedSince, draftsToJSON, draftsFromJSON,
 } from "../js/sync.js";
 import { writableOnly } from "../js/ops.js";
 
@@ -606,4 +606,60 @@ test("audit: values edited in the sheet are written instead of the brief's; blan
   assert.equal(p["Amount (VAT-Ex.) (PHP)"], 250);
   assert.equal(p["Project Start"], 10);                    // not edited: from the brief
   assert.ok(!("VAT%" in p));                               // the row has one
+});
+
+test("fill blanks plan: only still-blank cells, VAT% follows its amount", () => {
+  const AMOUNT = "Amount (VAT-Ex.) (PHP)";
+  // nothing filled meanwhile
+  assert.deepEqual(fillPlan({ [AMOUNT]: 100, "VAT%": "12%", MKT: [{ id: "ou_1" }] }, {}),
+    { written: { [AMOUNT]: 100, "VAT%": "12%", MKT: [{ id: "ou_1" }] }, skipped: [] });
+  // someone filled the amount: it's skipped, and VAT% (which only goes with it) stays out without being reported
+  assert.deepEqual(fillPlan({ [AMOUNT]: 100, "VAT%": "12%" }, { [AMOUNT]: 90 }), { written: {}, skipped: [AMOUNT] });
+  // someone set a different VAT%: both are held back (the amount was worked out at 12%)
+  assert.deepEqual(fillPlan({ [AMOUNT]: 100, "VAT%": "12%" }, { "VAT%": "0%" }), { written: {}, skipped: [AMOUNT, "VAT%"] });
+  // the same VAT% was set: the amount still goes, VAT% needs no write
+  assert.deepEqual(fillPlan({ [AMOUNT]: 100, "VAT%": "12%" }, { "VAT%": "12%" }), { written: { [AMOUNT]: 100 }, skipped: [] });
+  // zero isn't blank; empty text and an empty list are
+  assert.deepEqual(fillPlan({ A: 1, B: 2, C: 3 }, { A: 0, B: seg("  "), C: [] }), { written: { B: 2, C: 3 }, skipped: ["A"] });
+  assert.deepEqual(fillPlan({ A: 1 }, null), { written: { A: 1 }, skipped: [] });
+});
+
+test("invoice details: which cells changed in Lark since the list loaded", () => {
+  const f = (o) => rec("recC", { "AR Name": seg("T1"), "Invoice Number": seg("INV-1"), "SI Number": seg("5"), "Invoice Date": 1791302400000,
+    Invoice: [{ file_token: "a", name: "a.pdf", size: 1 }], ...o });
+  const loaded = collectionRow(f({}));
+  assert.deepEqual(invoiceChangedSince({ "Invoice Number": "INV-2" }, loaded, f({})), []);
+  assert.deepEqual(invoiceChangedSince({ "Invoice Number": "INV-2" }, loaded, f({ "Invoice Number": seg("INV-9") })), ["Invoice Number"]);
+  assert.deepEqual(invoiceChangedSince({ "Invoice Number": "INV-2" }, loaded, f({ "SI Number": seg("6") })), []);   // not a cell we write
+  assert.deepEqual(invoiceChangedSince({ "SI Number": null, "Invoice Date": 1 }, loaded, f({ "SI Number": seg("6"), "Invoice Date": 1791388800000 })),
+    ["SI Number", "Invoice Date"]);
+  assert.deepEqual(invoiceChangedSince({ Invoice: [] }, loaded, f({ Invoice: [{ file_token: "a" }, { file_token: "b" }] })), ["Invoice"]);
+  assert.deepEqual(invoiceChangedSince({ Invoice: [] }, loaded, f({ Invoice: undefined })), ["Invoice"]);
+});
+
+test("drafts keep their client_token across a reload, without files", () => {
+  const now = 1791302400000;
+  const drafts = new Map([
+    ["brief::recB1", { clientToken: "tok-1", targetId: null, at: now, choices: { vat: "0%", client: "Acme", bd: [{ id: "ou_1", name: "A" }] } }],
+    ["invoice:approved:recI1", { clientToken: "tok-2", targetId: "recC9", at: now - 1000,
+      choices: { invoiceNo: "INV-7", files: [{ name: "a.pdf", size: 5, file: { fake: "File" } }], names: new Map([["ou_1", "A"]]) } }],
+    ["par::bad", { clientToken: "", choices: {} }],                       // no token: nothing to keep
+  ]);
+  const saved = JSON.parse(JSON.stringify(draftsToJSON(drafts, now)));    // through storage
+  assert.deepEqual(Object.keys(saved.items), ["brief::recB1", "invoice:approved:recI1"]);
+  assert.deepEqual(saved.items["invoice:approved:recI1"].choices, { invoiceNo: "INV-7", files: [] });
+  const back = new Map(draftsFromJSON(saved, now + 60000));
+  assert.equal(back.get("brief::recB1").clientToken, "tok-1");
+  assert.deepEqual(back.get("brief::recB1").choices, { vat: "0%", client: "Acme", bd: [{ id: "ou_1", name: "A" }] });
+  assert.equal(back.get("invoice:approved:recI1").targetId, "recC9");
+  // old, malformed and foreign data is dropped
+  assert.equal(draftsFromJSON(saved, now + 8 * 24 * 3600 * 1000).length, 0);
+  assert.deepEqual(draftsFromJSON(null), []);
+  assert.deepEqual(draftsFromJSON({ v: 2, items: {} }), []);
+  assert.deepEqual(draftsFromJSON({ v: 1, items: { k: { clientToken: 5, choices: {} }, j: "x" } }, now), []);
+  // only the newest are kept
+  const many = new Map(Array.from({ length: 60 }, (_, i) => [`k${i}`, { clientToken: `t${i}`, at: now + i, choices: {} }]));
+  const kept = Object.keys(draftsToJSON(many, now + 100).items);
+  assert.equal(kept.length, 50);
+  assert.ok(kept.includes("k59") && !kept.includes("k0"));
 });

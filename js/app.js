@@ -2,25 +2,44 @@
    happens after a push. The cards live in inbox.js, the table in universe.js; the
    transfer rules in sync.js and every Lark read/write in ops.js. */
 
-import { ENV_LABEL, TABLE_LINKS, RULES } from "./config.js";
+import { APP, ENV_LABEL, TABLE_LINKS, RULES, SERVICES } from "./config.js";
 import { parseBaseLink, loadEverything, loadUniverse, selectOptions, TABLE_TITLES, computedTypes } from "./ops.js";
-import { indexUniverse, indexCollections, briefCards, parCards, collectionCards, stepStatus, peoplePool, pmPool, auditCards, briefsByCode } from "./sync.js";
-import { $, $$, h, ic, fillIcons, toast, fmt, store, recall, sleep, initTheme } from "./ui.js";
 import {
-  lark, wake, conn, onConn, describe, isDeadToken, LarkError,
-  proxyHost, proxyOverride, setProxyOverride, isLocalPage, HOSTED_PROXY,
-} from "./net.js";
+  indexUniverse, indexCollections, briefCards, parCards, collectionCards, stepStatus, peoplePool, pmPool, auditCards, briefsByCode,
+  draftsToJSON, draftsFromJSON,
+} from "./sync.js";
+import { $, $$, h, ic, fillIcons, toast, fmt, store, recall, sleep, initTheme } from "./ui.js";
+import { lark, wake, conn, onConn, describe, isDeadToken, LarkError, proxyHost, unreachable } from "./net.js";
+import { overrides, setLarkUrl, savedLarkUrl, isLocalPage, isServiceUrl } from "./settings.js";
 import * as auth from "./auth.js";
 import { createInbox } from "./inbox.js";
 import { createUniverse } from "./universe.js";
 import { createCollections } from "./collections.js";
 
 const tables = Object.fromEntries(Object.entries(TABLE_LINKS).map(([k, link]) => [k, parseBaseLink(link)]));
-const KEY = { theme: "polaris.theme", tab: "polaris.tab" };
-// What "Clear local data" forgets: views and hidden cards, never the login or the theme.
-const LOCAL_KEYS = ["polaris.auditHidden", "polaris.uniSort", "polaris.uniCollapsed", "polaris.colSort", "polaris.colCollapsed"];
+const KEY = { theme: "polaris.theme", tab: "polaris.tab", draft: "polaris.draft" };
+// What "Clear local data" forgets: views, hidden cards and unsent drafts, never the login or the theme.
+const LOCAL_KEYS = ["polaris.auditHidden", "polaris.uniSort", "polaris.uniCollapsed", "polaris.colSort", "polaris.colCollapsed", KEY.draft];
 const STALE_AFTER_MS = 5 * 60 * 1000;    // reload when the page comes back after this long
 const LOW_SESSION_MS = 10 * 60 * 1000;
+
+/* What was typed in a push sheet that was cancelled, with its client_token. Kept in
+   this browser (polaris.draft), so a reload and a retry can't add a second row. */
+class DraftMap extends Map {
+  set(key, value) {
+    super.set(key, value);
+    if (value && !value.at) value.at = Date.now();
+    this.save();
+    return this;
+  }
+  delete(key) { const had = super.delete(key); if (had) this.save(); return had; }
+  save() { store("local", KEY.draft, draftsToJSON(this)); }
+}
+function loadDrafts() {
+  const map = new DraftMap();
+  for (const [k, v] of draftsFromJSON(recall("local", KEY.draft))) Map.prototype.set.call(map, k, v);
+  return map;
+}
 
 /* ======================= state ======================= */
 const S = {
@@ -40,17 +59,27 @@ const S = {
   working: new Set(),       // cards with a write in flight
   entering: new Set(),      // cards that just came back (Undo): animate once
   flashCard: null,          // a card to highlight where it lands
-  drafts: new Map(),        // what was typed in a push sheet, kept if it's cancelled
+  drafts: loadDrafts(),     // what was typed in a push sheet, kept if it's cancelled (and across a reload)
   query: { brief: "", par: "", invoice: "", andon: "", audit: "" },
   auditHide: new Set(recall("local", "polaris.auditHidden") || []),   // audit cards hidden on this device
 };
 
-/* Every Lark call runs as the signed-in user. Reads retry while the proxy wakes. */
+/* Every Lark call runs as the signed-in user. Reads retry while the proxy wakes;
+   writes never do. While a write or upload is running (track), its calls may use
+   the token through Lark's last 30 s of grace, so the clock can't cut it off. */
+let inflight = 0;
+async function track(work) {
+  inflight++;
+  try { return await work(); } finally { if (--inflight === 0) tickSession(); }
+}
 function call(method, url, body) {
-  const t = auth.currentToken();
-  if (!t) return Promise.reject(new LarkError("login ended", { json: { code: 99991677 } }));
+  const t = inflight ? auth.workToken() : auth.currentToken();
+  if (!t) {
+    auth.end();
+    return Promise.reject(new LarkError("login ended", { deadToken: true, json: { code: 99991677 } }));
+  }
   const read = method === "GET" || /\/records\/(search|batch_get)/.test(url);
-  return lark(method, url, { token: t.access_token, body, read });
+  return lark(method, url, { token: t.access_token, body, read, write: !read });
 }
 
 const field = (table, name) => ((S.fields && S.fields[table]) || []).find(f => f.field_name === name);
@@ -81,15 +110,16 @@ const ctx = {
   render: () => render(),
   recompute: () => recompute(),
   loadData: (o) => loadData(o),
-  sessionEnded: (m) => sessionEnded(m),
+  sessionEnded: (m) => auth.end(m),
+  track: (work) => track(work),
   afterPush: (c, res, payload, extra) => afterPush(c, res, payload, extra),
-  ensureTime: () => ensureTime(),
+  ensureTime: (ms) => ensureTime(ms),
   collectionOptions: () => ({
     "Currency": selectOptions(field("collections", "Currency")),
     "Business Unit": selectOptions(field("collections", "Business Unit")),
   }),
 };
-ctx.token = () => (auth.currentToken() || {}).access_token;
+ctx.token = () => (auth.workToken() || {}).access_token;   // for uploads, which run inside track()
 const inbox = createInbox(ctx);
 const universe = createUniverse(ctx);
 const collections = createCollections(ctx);
@@ -119,8 +149,16 @@ function onRoute() {
 }
 
 /* ======================= rendering ======================= */
+const TAB_TITLES = { brief: "Briefs", par: "PARs", invoice: "Invoices", andon: "ANDON", audit: "Audit" };
+function pageTitle() {
+  const name = { login: "Log in", busy: "Logging in", settings: "Settings" }[S.view]
+    || (S.show === "universe" && !isSplit() ? (S.tab === "invoice" ? "Collections" : "Universe") : TAB_TITLES[S.tab]);
+  return `${name} · ${APP.name}`;
+}
+
 function render() {
   for (const v of $$(".view")) v.classList.toggle("active", v.dataset.view === S.view);
+  document.title = pageTitle();
   renderHeader();
   $("#blockNote").hidden = !conn.blocked;
   if (S.view === "login") renderLogin();
@@ -159,7 +197,9 @@ function renderHeader() {
   const signedIn = !!auth.currentToken();
   $("#envBadge").hidden = !ENV_LABEL;
   $("#envBadge").textContent = ENV_LABEL;
-  $("#overrideBadge").hidden = !proxyOverride();
+  const over = overrides();
+  $("#overrideBadge").hidden = !over.length;
+  $("#overrideBadge").title = over.length ? `Overridden in this browser. ${over.join(". ")}` : "";
   $("#sessionPill").hidden = !signedIn;
   $("#meLink").hidden = !signedIn;
   $("#workLink").hidden = !signedIn;
@@ -206,8 +246,9 @@ async function login(returnTo) {
   }
 }
 
+/* A session ended (the clock, a dead-token code from Lark, Log out): auth.end() has
+   cleared the login; drop what's on screen. Drafts stay, so a new login picks up where this left off. */
 function sessionEnded(message) {
-  auth.clearSession();
   for (const d of document.querySelectorAll("dialog[open]")) d.close();   // any open sheet: the push sheet or invoice details
   S.data = null; S.lists = null; S.user = null; S.loadError = null;
   S.loginNote = message || "Your login ended after about 2 hours. Log in again to keep going.";
@@ -215,12 +256,14 @@ function sessionEnded(message) {
   if (S.view !== "settings") S.view = "login";
   render();
 }
+auth.onEnded(sessionEnded);
 
-/* Writes need a little time left on the login. */
-function ensureTime() {
-  if (auth.msLeft() > 60000) return true;
+/* Every write needs a little time left on the login (a longer task, like several
+   uploads, asks for more). */
+function ensureTime(ms = 60000) {
+  if (auth.msLeft() > ms) return true;
   toast("Your login is about to end, so this wasn't sent.", {
-    type: "error", detail: "Log in again, then push it.", action: "Log in again", onAction: () => login(location.hash),
+    type: "error", detail: "Log in again, then try it.", action: "Log in again", onAction: () => login(location.hash),
   });
   return false;
 }
@@ -228,7 +271,7 @@ function ensureTime() {
 /* ======================= loading ======================= */
 async function loadData({ quiet = false } = {}) {
   if (S.loading) return;
-  if (!auth.currentToken()) return sessionEnded();
+  if (!auth.currentToken()) return auth.end();
   S.loading = true;
   S.quiet = quiet && !!S.data;
   S.loadError = null;
@@ -238,7 +281,7 @@ async function loadData({ quiet = false } = {}) {
   try {
     const awake = wake();
     if ((await Promise.race([awake, sleep(1200).then(() => "slow")])) === "slow") { S.waking = true; render(); }
-    if (!(await awake)) throw new LarkError("unreachable", { network: true });
+    if (!(await awake)) throw unreachable();
     S.waking = false;
     render();
     const res = await loadEverything(call, tables, RULES, (k, n, total) => {
@@ -255,7 +298,7 @@ async function loadData({ quiet = false } = {}) {
     S.loadedAt = Date.now();
     recompute();
   } catch (err) {
-    if (isDeadToken(err)) { S.loading = false; return sessionEnded(); }
+    if (isDeadToken(err)) return;   // the session already ended (net.js); the login screen is up
     S.loadError = err;
     if (S.quiet) toast("Couldn't refresh.", { type: "error", detail: describe(err), action: "Try again", onAction: () => loadData({ quiet: true }) });
   } finally {
@@ -303,8 +346,7 @@ async function refreshUniverse() {
     recompute();
     return true;
   } catch (err) {
-    if (isDeadToken(err)) { sessionEnded(); return false; }
-    return false;
+    return false;   // (a dead login already ended the session in net.js)
   }
 }
 
@@ -414,7 +456,7 @@ function renderSettings() {
       h("div", { class: "account-actions" },
         h("button", { type: "button", class: "btn btn-sm", onclick: () => login(location.hash) }, "Log in again"),
         h("button", { type: "button", class: "btn btn-sm btn-ghost", onclick: () => {
-          sessionEnded("You've logged out of Polaris. You're still logged in to Lark itself.");
+          auth.end("You've logged out of Polaris. You're still logged in to Lark itself.");
           location.hash = "#/";
         } }, ic("logout"), "Log out")));
   } else {
@@ -426,7 +468,9 @@ function renderSettings() {
   }
 
   const proxyState = conn.blocked ? ["is-err", "Blocked by this browser. Allow it in your ad blocker, then reload."]
-    : { awake: ["is-ok", "Awake"], waking: ["is-warn", "Waking up… This can take up to a minute."],
+    : { awake: ["is-ok", `Awake${conn.version ? ` · v${conn.version.replace(/^v/i, "")}` : ""}`],
+        waking: ["is-warn", "Waking up… This can take up to a minute."],
+        outdated: ["is-err", `Out of date (${conn.detail}). Ask the admin to redeploy it.`],
         down: ["is-err", `Unreachable${conn.detail ? ` (${conn.detail})` : ""}`] }[conn.proxy]
     || ["", "Not checked yet"];
   const rows = S.data ? Object.values(S.data).reduce((n, list) => n + list.length, 0) : 0;
@@ -439,7 +483,7 @@ function renderSettings() {
     h("li", null, h("span", { class: `dot ${proxyState[0]}` }),
       h("span", { class: "status-text" }, h("b", null, "Connection service"), h("span", null, `${proxyState[1]} · ${proxyHost()}`)),
       h("button", { type: "button", class: "btn btn-sm", onclick: () => { conn.checkedAt = 0; wake().then(renderSettings); renderSettings(); } },
-        conn.proxy === "down" ? "Try again" : "Wake up")),
+        conn.proxy === "down" || conn.proxy === "outdated" ? "Try again" : "Wake up")),
     h("li", null, h("span", { class: `dot ${larkState[0]}` }),
       h("span", { class: "status-text" }, h("b", null, "Lark tables"), h("span", null, larkState[1])),
       t ? h("button", { type: "button", class: "btn btn-sm", disabled: S.loading, onclick: () => loadData({ quiet: !!S.data }) }, "Refresh") : null),
@@ -448,12 +492,12 @@ function renderSettings() {
         h("span", null, S.data ? `${S.data[k].length.toLocaleString()} rows` : tb.table)),
       h("a", { class: "btn btn-sm btn-ghost", href: tb.url, target: "_blank", rel: "noopener" }, "Open in Lark", ic("external")))));
   $("#envNote").textContent = ENV_LABEL
-    ? `Polaris is connected to the ${ENV_LABEL.toLowerCase()} tables. To go live, change the links in js/config.js.`
+    ? `Polaris is connected to the ${ENV_LABEL.toLowerCase()} tables. To go live, set APP.env in js/config.js.`
     : "";
   $("#advanced").hidden = !isLocalPage();
   const input = $("#proxyInput");
-  if (document.activeElement !== input) input.value = proxyOverride();
-  input.placeholder = HOSTED_PROXY;
+  if (document.activeElement !== input) input.value = savedLarkUrl();
+  input.placeholder = SERVICES.lark.url;
 }
 
 function sessionLine() {
@@ -466,7 +510,7 @@ function clearLocal() {
   const saved = LOCAL_KEYS.map(k => [k, recall("local", k)]);
   LOCAL_KEYS.forEach(k => store("local", k));
   reloadLocal();
-  toast("Cleared this browser's hidden cards, sort order and folded groups.", {
+  toast("Cleared this browser's hidden cards, sort order, folded groups and unsent drafts.", {
     type: "success", detail: "Your login and theme are kept.", action: "Undo", onAction: () => {
       saved.forEach(([k, v]) => { if (v !== null) store("local", k, v); });
       reloadLocal();
@@ -475,6 +519,7 @@ function clearLocal() {
 }
 function reloadLocal() {
   S.auditHide = new Set(recall("local", "polaris.auditHidden") || []);
+  S.drafts = loadDrafts();
   universe.loadPrefs();
   collections.loadPrefs();
   if (S.data) recompute();
@@ -485,14 +530,19 @@ function reloadLocal() {
 let warnedLow = false;
 function tickSession() {
   if (!auth.hadSession()) return;
-  if (!auth.currentToken()) { if (S.view !== "login") sessionEnded(); return; }
+  if (!auth.currentToken()) {
+    // A write or upload still running finishes first (track() ticks again when it settles).
+    if (!inflight && S.view !== "login") auth.end();
+    return;
+  }
   renderHeader();
   const line = $("#accSession");
   if (line) line.textContent = sessionLine();
   if (!warnedLow && auth.msLeft() < 5 * 60 * 1000) {
     warnedLow = true;
     toast(`Your login ends at ${fmt.time(auth.endsAt())}.`, {
-      type: "warn", detail: "Log in again to keep working without a break.", action: "Log in again", onAction: () => login(location.hash),
+      type: "warn", timeout: 0, detail: "Log in again to keep working without a break.",
+      action: "Log in again", onAction: () => login(location.hash),
     });
   }
 }
@@ -505,15 +555,15 @@ $("#reloadBtn").addEventListener("click", () => location.reload());
 $("#clearLocal").addEventListener("click", clearLocal);
 $("#proxySave").addEventListener("click", () => {
   const v = $("#proxyInput").value.trim();
-  if (v && !/^https?:\/\//.test(v)) { toast("That address should start with https:// or http://.", { type: "error" }); return; }
-  setProxyOverride(v);
+  if (v && !isServiceUrl(v)) { toast("Use an https:// address, or http:// for one on this computer.", { type: "error" }); return; }
+  setLarkUrl(v);
   toast(v ? "Using that connection service on this computer." : "Using the hosted connection service.", { type: "success" });
   conn.checkedAt = 0; conn.proxy = "unknown"; conn.blocked = false;
   wake().then(() => render());
   render();
 });
 $("#proxyReset").addEventListener("click", () => {
-  setProxyOverride("");
+  setLarkUrl("");
   $("#proxyInput").value = "";
   toast("Using the hosted connection service.", { type: "success" });
   conn.checkedAt = 0; conn.proxy = "unknown"; conn.blocked = false;
@@ -532,6 +582,8 @@ onConn(() => {
   if (S.view === "work" && S.loading) { inbox.renderLoader(); universe.renderLoader(); }
 });
 window.addEventListener("hashchange", onRoute);
+// A write or upload is running: closing the tab now could lose it.
+window.addEventListener("beforeunload", (e) => { if (inflight) { e.preventDefault(); e.returnValue = ""; } });
 matchMedia("(min-width: 1280px)").addEventListener("change", () => render());
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") return;
@@ -560,7 +612,7 @@ setInterval(tickSession, 20000);
   if (auth.currentToken()) {
     S.user = null;
     auth.loadUser().then((u) => { S.user = u; renderHeader(); if (S.view === "settings") renderSettings(); })
-      .catch((err) => { if (isDeadToken(err)) sessionEnded(); });
+      .catch(() => {});   // no name or picture is fine; a dead login already ended the session (net.js)
   } else if (auth.hadSession() && !S.loginNote) {
     S.loginNote = "Your login ended after about 2 hours. Log in again to keep going.";
     auth.clearSession();

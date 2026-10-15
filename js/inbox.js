@@ -9,7 +9,7 @@ import {
 } from "./sync.js";
 import { $, h, ic, toast, fmt, flash, copyable, store, collapse, busy, radioKeys } from "./ui.js";
 import { dayOnly, copyableText, dateField } from "./polaris-ui.js";
-import { describe, isDeadToken, conn, uploadToBase } from "./net.js";
+import { describe, isDeadToken, isUncertain, uploadToBase } from "./net.js";
 
 const NOUN = { brief: "briefs", par: "PARs", invoice: "invoices", andon: "briefs for ANDON", audit: "projects with blanks" };
 // The search box says what it looks through on each tab.
@@ -221,6 +221,7 @@ export function createInbox(ctx) {
     const src = sourceOf(c), box = ignoreFieldOf(c);
     const rec = (S.data[src] || []).find(r => r.record_id === c.id);
     if (!rec) return;
+    if (!ctx.ensureTime()) return;     // Ignore and Undo are writes too
     const before = rec.fields[box];
     const what = c.requestNo && c.kind !== "brief" && c.kind !== "andon" ? `${c.code} · ${c.requestNo}` : c.code;
     const apply = (v) => { rec.fields[box] = v; ctx.recompute(); ctx.render(); };
@@ -237,15 +238,22 @@ export function createInbox(ctx) {
       : toast(`${what} is back in the list.`, { type: "success" });
     S.working.add(c.id);
     try {
-      const res = await setIgnore(ctx.call, ctx.tables[src], c.id, value, box);
+      const res = await ctx.track(() => setIgnore(ctx.call, ctx.tables[src], c.id, value, box));
       if (res.readBackError || (res.mismatches && res.mismatches.length)) {
         toast(`Lark didn't confirm the change to ${what}.`, { type: "warn", timeout: 0,
           detail: `Check its ${box} box in Lark.`, link: { href: ctx.tables[src].url, text: "Open in Lark" } });
       }
     } catch (err) {
-      apply(before);                       // roll back, and say why
       closeToast();
-      if (isDeadToken(err)) return ctx.sessionEnded();
+      if (isDeadToken(err)) { rec.fields[box] = before; return; }   // the session already ended (net.js); data is gone
+      if (isUncertain(err)) {              // it may have landed: don't roll back, show what Lark really has
+        toast(`Polaris couldn't confirm the change to ${what}.`, { type: "warn", timeout: 0,
+          detail: "The list refreshed to show what Lark has. Check it before trying again.",
+          link: { href: ctx.tables[src].url, text: "Open in Lark" } });
+        ctx.loadData({ quiet: true });
+        return;
+      }
+      apply(before);                       // roll back, and say why
       toast(`Couldn't ${value ? "ignore" : "restore"} ${what}.`, {
         type: "error", detail: describe(err), action: "Try again", onAction: () => ignore(c, value),
       });
@@ -729,31 +737,41 @@ export function createInbox(ctx) {
     refresh();
   }
 
-  /* Invoice details from the sheet, in Lark's write format (files uploaded first;
-     tokens are kept on the sheet so a retry doesn't upload them twice). */
+  /* Invoice details from the sheet, in Lark's write format (files uploaded first,
+     with their progress on the button; tokens are kept on the sheet so a retry
+     doesn't upload them twice). */
   async function invoiceDetails(ch) {
     const out = {};
     if (ch.invoiceNo.trim()) out["Invoice Number"] = ch.invoiceNo.trim();
     if (ch.siNo.trim()) out["SI Number"] = ch.siNo.trim();
     if (ch.invoiceDate) out["Invoice Date"] = ch.invoiceDate;   // already midnight Manila
     const todo = ch.files.filter(f => !f.file_token);
+    const label = go.querySelector(".label");
     for (let i = 0; i < todo.length; i++) {
-      go.querySelector(".label").textContent = todo.length > 1 ? `Uploading ${i + 1} of ${todo.length}…` : "Uploading…";
-      todo[i].file_token = await uploadToBase(todo[i].file, ctx.tables.collections.app, ctx.token());
+      const what = todo.length > 1 ? `Uploading ${i + 1} of ${todo.length}` : "Uploading";
+      label.textContent = `${what}…`;
+      todo[i].file_token = await uploadToBase(todo[i].file, ctx.tables.collections, ctx.token(),
+        { onProgress: (p) => { label.textContent = `${what} ${Math.round(p * 100)}%`; } });
     }
     if (ch.files.length) out["Invoice"] = ch.files.map(f => ({ file_token: f.file_token }));
-    go.querySelector(".label").textContent = "Pushing…";
+    label.textContent = "Pushing…";
     return out;
   }
 
   async function runPush() {
     if (!sheet || sheet.busy) return;
     const c = sheet.card;
-    if (!ctx.ensureTime()) return;
+    // Several uploads can take a while: ask for 2 minutes of login instead of 1.
+    const uploads = c.kind === "invoice" && c.step === "approved" ? sheet.choices.files.filter(f => !f.file_token).length : 0;
+    if (!ctx.ensureTime(uploads > 1 ? 120000 : 60000)) return;
     $("#sheetError").hidden = true;
     setBusy(true);
     S.working.add(c.id);
     const s = sheet;
+    await ctx.track(() => push(c, s));    // the session clock waits for a write that's running
+  }
+
+  async function push(c, s) {
     try {
       let res, payload, extra = {};
       if (c.kind === "brief") {
@@ -789,18 +807,47 @@ export function createInbox(ctx) {
         s.done = true;
         S.drafts.delete(draftKey(c) + (s.invalid ? ":invalid" : ""));
         dialog.close();
-        toast(err.message, { type: "info", detail: err.detail || "Someone else already did this. The list has been refreshed." });
+        toast(err.message, { type: "info", detail: s.unsure
+          ? "It may have been your earlier try. The list has been refreshed."
+          : err.detail || "Someone else already did this. The list has been refreshed." });
         ctx.loadData({ quiet: true });
         return;
       }
-      if (isDeadToken(err)) { dialog.close(); return ctx.sessionEnded(); }
+      if (isDeadToken(err)) { dialog.close(); return; }   // the session already ended (net.js)
+      if (isUncertain(err)) return recheck(c, s, err);
+      // Lark answered with an error, or the failure came before anything was written.
       const box = $("#sheetError");
       box.textContent = `Nothing was written. ${describe(err)}`;
       box.hidden = false;
-      go.querySelector(".label").textContent = conn.proxy === "down" ? "Try again" : go.querySelector(".label").textContent;
     }
   }
 
+  /* A write that may have landed (it timed out, or the connection dropped after
+     it was sent). Look at Lark before the person can try again: if the card has
+     left the refreshed list, the write is there. */
+  async function recheck(c, s, err) {
+    s.unsure = true;
+    const box = $("#sheetError");
+    box.textContent = describe(err);
+    box.hidden = false;
+    s.busy = true;
+    busy(go, true, "Checking Lark…");
+    cancel.disabled = true;
+    const was = S.loadedAt;
+    await ctx.loadData({ quiet: true });
+    if (sheet !== s) return;                 // the sheet closed meanwhile (the session ended)
+    setBusy(false);
+    if (S.loadedAt === was) return;          // couldn't look: the message above stands
+    const there = S.lists && (S.lists[c.kind] || { cards: [] }).cards.some(x => x.id === c.id && x.step === c.step);
+    if (there) {
+      box.textContent = `${describe(err)} A fresh look at Lark shows it isn't there yet, so it's safe to try again.`;
+      return;
+    }
+    s.done = true;
+    S.drafts.delete(draftKey(c) + (s.invalid ? ":invalid" : ""));
+    dialog.close();
+    toast("It's in Lark.", { type: "info", detail: "Polaris didn't hear back at first, but a fresh look shows it's done. The list has been refreshed." });
+  }
   /* ======================= small inputs ======================= */
 
   /* A text input with suggestions (free text allowed). */

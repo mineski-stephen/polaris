@@ -1,5 +1,7 @@
 # Polaris
 
+<img src="img/polaris-icon.svg" alt="Polaris logo" width="96" align="right">
+
 Polaris keeps the **🌌 Universe** and **💸 Collections** Lark tables in step with
 what gets filed. Each change the trackers need shows up as a card;
 **Push** makes it with one click, **Ignore** hides it for good (with Undo). It works on a
@@ -13,7 +15,7 @@ phone and on a PC, and every change is made as you, with your own Lark login.
 | **Invoice Request** (by Account Managers) | moves its Collections row along: **Pending Invoice Request Approval** when filed, **For Collection** when approved |
 | **Project Brief** (any department) | a new **ANDON** row (Project Management's board) |
 
-> **Connected to the live tables.** `ENV_LABEL` in `js/config.js` is empty, so the
+> **Connected to the live tables.** `APP.env` in `js/config.js` is `"live"`, so the
 > header shows no *Test copy* badge and every push changes real data. See
 > [Going live](#going-live) for switching between the test copies and production.
 
@@ -26,22 +28,30 @@ phone and on a PC, and every change is made as you, with your own Lark login.
 - [What gets written](#what-gets-written)
 - [The audit](#the-audit)
 - [The Universe view](#the-universe-view)
+- [The Collections view](#the-collections-view)
+- [Settings](#settings)
+- [How it's built](#how-its-built)
 - [Safety checks](#safety-checks)
 - [Running it on your computer](#running-it-on-your-computer)
 - [Hosting it for phones](#hosting-it-for-phones)
 - [Going live](#going-live)
-- [Tests](#tests)
-- [Troubleshooting](#troubleshooting)
-- [Files](#files)
+- [Tests and tools](#tests-and-tools)
+- [Design decisions](#design-decisions)
+- [Security and privacy](#security-and-privacy)
 - [Known limits](#known-limits)
+- [Troubleshooting](#troubleshooting)
+- [Maintenance recipes](#maintenance-recipes)
+- [Files](#files)
 
 ---
 
 ## Using Polaris
 
-1. **Log in with Lark.** A login lasts about 2 hours. The clock in the header
-   shows how long you have left (it turns yellow in the last 10 minutes), and
-   Settings shows the exact time it ends. **Log in again** there to get a fresh 2 hours.
+1. **Log in with Lark.** A login lasts about 2 hours and belongs to this browser tab
+   (another tab logs in on its own, in one click). The clock in the header shows how
+   long you have left (it turns amber in the last 10 minutes), a message stays on screen
+   in the last 5, and Settings shows the exact time it ends. **Log in again** there to
+   get a fresh 2 hours. A push that's already running isn't cut off by the clock.
 2. **Briefs / PARs** tabs list what isn't in the Universe yet; **Invoices** lists
    every change Collections needs (see [Invoices](#invoices-the-collections-lifecycle)).
    Newest first; search narrows the list.
@@ -60,10 +70,7 @@ phone and on a PC, and every change is made as you, with your own Lark login.
 5. On a wide screen the **Universe** table sits beside the cards, so you can watch
    a pushed brief land (it glows briefly). On a phone, open the **Universe** tab
    or tap **View** in the message after a push.
-6. **Settings** (the gear next to **Data Audit** in the top bar): your login, Light / Dark / System
-   theme, and connection status. **This browser > Clear local data** forgets the
-   audit cards you hid and how the tables are sorted and folded (your login and
-   theme stay); **Undo** in the message puts them back.
+6. **Settings** (the gear next to **Data Audit** in the top bar): see [Settings](#settings).
 
 ---
 
@@ -274,6 +281,65 @@ the push until it's fixed.
 SI numbers copy to the clipboard when clicked: on cards (including inside notes),
 in the push sheets, and in the Universe and Collections tables.
 
+---
+
+## Settings
+
+The gear in the top bar. It works logged out too.
+
+| Section | What it does |
+| ------- | ------------ |
+| **Account** | Who you are, when your login ends, **Log in again** (a fresh 2 hours) and **Log out**. Log out only clears Polaris in this tab; you stay logged in to Lark itself. |
+| **Appearance** | Light, Dark or System. |
+| **Connections** | **Connection service**: Awake (with its version once it reports one), Waking up, Out of date or Unreachable, with **Wake up** / **Try again**. **Lark tables**: connected, with the row count, or the column problems found. One row per table, each with **Open in Lark**. |
+| **Advanced** (only on a page opened from this computer) | Another connection service address, saved in this browser. Only an `https://` address, or an `http://` one on this computer. A `?lark=<address>` link does the same for one tab, and `?reset` clears it. While any override is active the top bar shows a red **Overridden** badge (hover it to see what). |
+| **This browser** | **Clear local data** forgets the audit cards you hid, the tables' sort order and folded groups, and unsent drafts. Your login and theme stay. **Undo** in the message puts them back. |
+
+What Polaris keeps in this browser (every key starts with `polaris.`, all values are JSON):
+
+| Key | Where | Holds |
+| --- | ----- | ----- |
+| `theme`, `tab` | this browser | the theme choice, the open tab |
+| `settings` | this browser | `{ "larkUrl": … }`, the saved connection service address (used on a local page only) |
+| `draft` | this browser | what you typed in a push sheet you cancelled, with its retry token, for up to 7 days. Files aren't kept. |
+| `auditHidden`, `uniSort`, `uniCollapsed`, `colSort`, `colCollapsed` | this browser | hidden audit cards, sort order, folded groups |
+| `auth.token`, `auth.pending`, `auth.user` | this tab | your login, a login in progress, your name and picture. Gone when the tab closes. |
+| `override.lark` | this tab | the `?lark=` link override |
+
+Polaris doesn't keep a copy of the tables: every load reads them fresh from Lark.
+
+---
+
+## How it's built
+
+```
+ Your browser: a static page (GitHub Pages, no build step, ES modules)
+   │  every Lark call carries YOUR login (Authorization: Bearer), so Lark applies your own permissions
+   ▼
+ Connection service = the shared Lark proxy (Render)  ──▶  Lark Open API (open.larksuite.com)
+   adds the app secret ONLY to the login code exchange
+ Lark Base is the database. There is no other server and no other database.
+```
+
+| Layer | Files |
+| ----- | ----- |
+| Page shell: state, routes, header, Settings | `index.html`, `js/app.js` |
+| Cards, push sheet, Ignore / Undo | `js/inbox.js` |
+| Universe and Collections tables | `js/universe.js`, `js/collections.js` |
+| Transfer rules (pure: no DOM, no network) | `js/sync.js` |
+| Every Lark read and write (takes an injected `call`) | `js/ops.js` |
+| Talking to the proxy: waking, retries, timeouts, uploads | `js/net.js` |
+| Errors as facts and their sentences (pure) | `js/errors.js` |
+| Which addresses and versions are acceptable (pure) | `js/service.js` |
+| Login and the session clock | `js/auth.js` |
+| Saved address and link overrides | `js/settings.js` |
+| Everything a maintainer changes | `js/config.js` |
+
+The same `ops.js` runs in the browser (with your login, through the proxy) and in the
+Node tools (with the app's token, straight to Lark), because both hand it a `call`.
+
+---
+
 ## Safety checks
 
 - **Every column is checked on load** (name, type, and the select options Polaris
@@ -282,23 +348,35 @@ in the push sheets, and in the Universe and Collections tables.
   (someone else pushed it), nothing is written and the list refreshes. A
   Collections change also checks its row still says what the card saw (same
   Status, same request number) and that no other row took the request meanwhile.
-- **Creates are idempotent** (`client_token`), so a retry can't make a second row.
+  Invoice details do the same for the cells you are changing, and the audit
+  only fills cells that are still blank (a VAT% someone set meanwhile counts too).
+- **Creates are idempotent** (`client_token`), and the token is kept with the draft,
+  so a retry (even after a reload) can't make a second row.
+- **Writes are never retried automatically.** A write that Lark answers with an error
+  says *Nothing was written.* A write that timed out (after 2 minutes) or lost the
+  connection after it was sent may have landed: Polaris says *couldn't confirm the
+  save*, looks at Lark again, and only then lets you try again (or tells you it's already there).
 - **Every write is read back** and compared field by field. The message says
   *All 15 fields checked in Lark*, or lists what didn't match.
 - Ignore is instant and rolls back (with the reason) if Lark refuses it.
+- **A login that Lark says is over** ends the session in one place, for every kind of
+  call, and nothing is lost: drafts stay for the next login.
 
 ---
 
 ## Running it on your computer
 
 ```bash
-python -m http.server 9123 --bind 127.0.0.1
+npm run serve        # python tools/serve.py 9123
 ```
 
 Open **http://127.0.0.1:9123/**. That address is registered as a redirect URL on
-Lark app `cli_aab0716138b8ded3`. The connection service (the Lark proxy on Render)
-sleeps when idle, so the first load can take up to a minute; Polaris says so
-while it waits.
+Lark app `cli_aab0716138b8ded3` (always `127.0.0.1`, never `localhost`: another
+address needs registering too). `tools/serve.py` turns caching off and serves `.js`
+as JavaScript (some Windows machines serve it as text, and module scripts then
+refuse to run); plain `python -m http.server` does neither. The connection service
+(the Lark proxy on Render) sleeps when idle, so the first load can take up to a
+minute; Polaris says so while it waits.
 
 ---
 
@@ -306,40 +384,56 @@ while it waits.
 
 Any static host works (for example GitHub Pages); there's no build step.
 
-1. Upload the folder (the `tests/` folder isn't needed, and must never include a preview snapshot).
+1. Upload the folder (the `tests/` and `tools/` folders aren't needed, and must never include a preview snapshot or a `.env` file).
 2. Register the page's exact address, e.g. `https://<user>.github.io/polaris/`,
    in the Lark developer console under *Security Settings > Redirect URLs*.
    Polaris checks this on the login screen and says if it's missing.
 3. It must be served over `https://`. On a phone you can *Add to Home Screen*.
+4. Everything under one `github.io` address can read what Polaris keeps in the browser
+   (the keys above). A dedicated account or a custom domain avoids that.
 
 ---
 
 ## Going live
 
-1. In [`js/config.js`](js/config.js), replace the five links in `TABLE_LINKS` with
-   the production tables and set `ENV_LABEL = ""` (this is how it's set now). To
-   go back to the test copies, for example to run the end-to-end check, put their
-   links back and set `ENV_LABEL = "Test copy"`.
+1. In [`js/config.js`](js/config.js) set `APP.env` to `"live"` (this is how it's set now).
+   The tables come from `TABLES.live`. To go back to the test copies, for example to
+   run the end-to-end check, paste their links into `TABLES.test` and set `APP.env`
+   to `"test"`: the header then shows a *Test copy* badge. (An empty test link stops
+   the page at start-up, so it can never fall back to production.)
 2. Run `npm run check:live` (or just open Polaris). Any column that's named or typed
    differently in production is listed, and pushing stays off until it's fixed.
+   `npm run setup` adds missing columns and options for you (it only adds).
 3. Everyone who uses Polaris needs edit access to those Bases (it writes as them).
 4. Older items that predate the Universe: ignore them once in Polaris.
 
 ---
 
-## Tests
+## Tests and tools
 
 ```bash
-npm test                 # offline: transfer rules and the Universe view, with fixtures from real data quirks
+npm test                 # offline: transfer rules, errors and codes, writes against a fake Lark, the tools
+npm run check:shell      # offline: import map, shared files, watchdog, syntax, no secret in any file
+npm run check:proxy      # asks the connection service for its name and version
 npm run check:live       # read-only: column check, the card lists and every payload, against the live tables
+npm run setup            # dry run: lists missing columns and select options (add -- --apply to create them)
 ```
+
+**The admin scripts** (`check:live`, `setup`, `check:e2e`, `preview:fixture`) run as the
+Lark app, straight to Lark, never through the connection service. They need the app's
+secret: copy `.env.example` to `.env` (git-ignored) and fill in `LARK_APP_SECRET`
+from the Lark developer console, or set it in the environment. `LARK_APP_ID` is
+optional (the app's own id is in `js/config.js`). `setup` only ever **adds**: it never
+deletes, renames or retypes a column, and only creates in the Universe and Collections
+(the Brief, PAR and Invoice Request tables are filled by Lark Approval; it reports
+those). Add `--optional` to also create optional columns (the Universe's IGNORE box).
 
 **Preview mode (developers, no login).** `npm run preview:fixture` saves a read-only
 snapshot of the tables to `tests/.preview-fixture.json`; then open
 **http://127.0.0.1:9123/?preview** in its own tab. Polaris runs unchanged, but every
-Lark call is answered from the snapshot and pushes are simulated in the tab (a red
-badge says so); nothing is sent to Lark. It only works on localhost. The snapshot
-holds real business data: never publish it (it's in `.gitignore`) and delete it when done.
+Lark call is answered from the snapshot and pushes and uploads are simulated in the
+tab (a red badge says so); nothing is sent to Lark. It only works on localhost. The
+snapshot holds real business data: never publish it (it's in `.gitignore`) and delete it when done.
 
 **End-to-end (writes to the test copy).** The Lark app can read these Bases but
 not edit them, so this runs as you, in the browser: log in to Polaris, then open
@@ -348,59 +442,58 @@ twice. It snapshots every stored field of all five tables, pushes one brief, one
 PAR, one Collections change that adds a row and one that moves a row along,
 ignores and restores one brief, re-pushes each (expecting *already done*), and
 requires the before/after difference to be exactly those writes. It refuses to
-run unless `ENV_LABEL` is `"Test copy"`, so it can't run while Polaris points at
+run unless `APP.env` is `"test"`, so it can't run while Polaris points at
 the live tables.
 
 ---
 
-## Troubleshooting
+## Design decisions
 
-| You see | What to do |
-| ------- | ---------- |
-| *Waking up the connection… This can take up to a minute.* | Nothing; the free Render service is starting. It retries for up to 3 minutes. |
-| *Polaris can't reach its connection service.* (red box, mentions an ad blocker) | Allow `lark-proxy-dwiw.onrender.com` in your ad blocker or privacy extension (or pause it on this page), then **Reload**. |
-| *This address (…) isn't registered on the Lark app* on the login screen | Add that exact address under *Security Settings > Redirect URLs* for the app. |
-| *Your login ended after about 2 hours.* | Log in again. Watch the clock in the header; *Log in again* in Settings renews it early. |
-| *Your login is about to end, so this wasn't sent.* | Log in again, then push. |
-| *These columns don't match what Polaris expects…* | A column was renamed or changed type (common when switching to production). Fix the table or `js/config.js`. |
-| *Your login can only read the tables.* | Log in again so Lark grants editing. |
-| *Lark says your account can't open or edit this Base.* | Ask the Base owner for edit access. |
-| *… is already in the Universe. Someone else already did this.* | Nothing; it was pushed elsewhere. The list refreshed. |
-| *Check these in Lark: …* after a push | A value didn't land as sent. Open the row in Lark and correct it. |
-| *Note: looks like "…" already in the Universe* | Probably a re-filed brief. Ignore it if it's the same project. |
-| *Push this project's brief first.* | Use **Go to the brief**, push it, then the PAR or invoice can go. |
-| *Add this project's PAR to the Universe first.* | Use **Go to the PAR** (if it's listed), push it, then the invoice can go. |
-| *"…" changed since the list was loaded.* | Someone updated that Collections row meanwhile. Nothing was written; the list refreshed, so check the card again. |
-| **Ignore** is greyed out on a *Won* card | The Universe has no IGNORE checkbox column yet. Add one (named `IGNORE`) to hide won projects that shouldn't go to Collections. |
-| A card would add a new Collections row you think already exists | Pick that row in the sheet instead (rows recorded by hand show *add the number only*), or ignore the card. |
+- **Lark is the database, and you are the user.** Every call carries your own login, so
+  Lark's permissions apply and the audit trail shows you.
+- **Tables are read in full, never through a view**, so a hidden row can't look like a
+  missing project and get added twice.
+- **Never write a blank or a guess.** Empty values are left out; a select value is only
+  written with an option that exists.
+- **Writes are never retried automatically, and "nothing was written" is only said when
+  Lark answered with an error.** A lost answer is "couldn't confirm", and the destination is
+  re-read before another try.
+- **The destination is the judge.** Each push re-reads where it's going and refuses when
+  someone got there first.
+- **Pure rules, injected `call`.** `sync.js`, `errors.js` and `service.js` have no DOM and no
+  network, and `ops.js` takes a `call`, so the offline tests and the Node tools run exactly the code the page runs.
+- **A login ends in one place.** Net.js spots a dead-token code on any call and ends the
+  session; callers still get the error, so they can roll back first.
+- **Everything configurable is in `js/config.js`.** No address, app id, scope or table id is typed anywhere else.
+- **JavaScript modules, not classic scripts**, so the tests run the page's own code. An import map
+  gives every module a fresh URL on each visit, so nobody needs a hard refresh after a deploy.
+- **No cached copy of the tables in the browser.** The first paint waits for Lark; the trade is that
+  nothing business-related is left on a shared computer.
 
 ---
 
-## Files
+## Security and privacy
 
-| File | Purpose |
-| ---- | ------- |
-| `index.html` | The page. |
-| `css/theme.css`, `css/mineski-base.css` | Polaris's colors (light and dark) and the shared Mineski stylesheet: unedited copies of `design-ref/mineski-design-language/assets/themes/polaris.css` and `assets/mineski-base.css`. |
-| `css/app.css` | Only what is Polaris's own: the workspace, the tables' columns and phone layout, the flow line, the audit and the date field. |
-| `img/` | The Polaris icon (SVG, plus PNGs for the favicon, phones and the home screen). |
-| `manifest.webmanifest` | Lets phones add Polaris to the home screen. |
-| `js/config.js` | Table links and business rules (department, USD rate, VAT, statuses, the Universe view). |
-| `js/sync.js` | The transfer rules as pure functions: cards, what gets written, the Universe view, read-back checks. |
-| `js/ops.js` | Every Lark read and write: column check, full-table loads, pushes with re-check and read-back. |
-| `js/net.js` | The connection service: waking it, retries, ad-blocker detection, error messages. |
-| `js/auth.js` | Lark login (OAuth + PKCE) and the session clock. |
-| `js/app.js` | Routes, header, loading, Settings, and what happens after a push. |
-| `js/inbox.js` | The cards, the push sheet (with the BD picker) and Ignore / Undo. |
-| `js/universe.js` | The Universe table. |
-| `js/collections.js` | The Collections table and its invoice details sheet. |
-| `js/icons.js`, `js/ui.js` | The shared Mineski icons and UI helpers: unedited copies of `design-ref/mineski-design-language/assets/`. Change them there, then copy them over. |
-| `js/polaris-ui.js` | Polaris-only helpers on top of `ui.js`: Lark date-only days, the date field, copyable request numbers and project codes in a sentence. |
-| `tests/` | Offline tests, the live read-only check and the end-to-end check. |
-
-Polaris follows the Mineski design language (`.claude/skills/mineski-design-language/`).
-One deliberate difference: it uses JavaScript modules instead of classic scripts, so the tests run the exact code the
-page runs; an import map still gives every module a fresh URL on each visit.
+- **No secret is in the page or the repository.** The Lark app secret lives on the
+  connection service (and in an admin's git-ignored `.env`). Only the app's public id is in `js/config.js`.
+- **Known issue, outside Polaris: the shared Lark proxy can still hand out an app token.** As of
+  Oct 2026 its `GET /token`, and its `/proxy` forwarding of `tenant_access_token`, add the app
+  secret for anyone, and that token can read and write the Bases without any login. Polaris's own
+  logins are safe (they're bound to your tab by PKCE), but until the proxy adds the secret only
+  to the login code exchange (see `SYSTEMS-PARITY.md`, P0) the protection of the data is Lark's
+  permissions on the app, not Polaris. The Node tools no longer need that route.
+- **Your login lives in this tab only** (`sessionStorage`): closing the tab ends it, and each new tab
+  logs in on its own (one click if Lark still knows you). It is sent only to the connection service,
+  in an `Authorization` header, never in an address. **Log out is local**: it clears Polaris here;
+  Lark has no way to revoke a login, so it still lasts up to 2 hours if someone copied it.
+- **The page may only talk to itself and the connection service**: a `Content-Security-Policy` meta lists them
+  (and local addresses for testing), and a `referrer` meta keeps addresses private.
+- **Overrides work only on a local page**, accept only `https` (or local `http`) addresses, and always show a red badge.
+- **What stays in this browser:** your theme and tab, hidden audit cards and view choices, the connection
+  service address you saved for testing, and unsent drafts (typed text and a retry token, for up to 7 days).
+  Business data from Lark isn't kept. **Clear local data** in Settings removes the drafts and view choices.
+- The preview snapshot and `.env` are git-ignored. `npm run check:shell` fails if a key, an app secret or a token
+  turns up in any file that would be published.
 
 ---
 
@@ -421,3 +514,109 @@ page runs; an import map still gives every module a fresh URL on each visit.
 - **Lark API formats.** Read-backs use `records/batch_get` (the single-record GET
   returns numbers as text). Text columns only accept plain text; Lark still shows
   URLs in them as clickable links.
+- **Files in a draft.** If you cancel (or reload) an invoice sheet, the text you typed comes
+  back, but the files you picked don't: add them again.
+- **One login lasts about 2 hours.** Lark gives no refresh token, so after that you log in again.
+
+---
+
+## Troubleshooting
+
+| You see | What to do |
+| ------- | ---------- |
+| *Polaris couldn't start.* | Reload. If it keeps happening, open Polaris from its web address (not a saved file). If you just deployed, a file is probably missing or not listed in the import map in `index.html`: run `npm run check:shell`. |
+| People report an old version | The page and every script are fetched fresh on each visit, so this is almost always the host's own cache (GitHub Pages can take a few minutes after a push) or an old tab left open. Reload the tab; in the browser console, `APP_BUILD` changes on each load. Check the files on the host are the new ones. |
+| *Waking up the connection… This can take up to a minute.* | Nothing; the free Render service is starting. It retries for up to 3 minutes. |
+| *Polaris can't reach its connection service.* (red box, mentions an ad blocker) | Allow `lark-proxy-dwiw.onrender.com` in your ad blocker or privacy extension (or pause it on this page), then **Reload**. |
+| *Polaris can't reach its connection service (…). It may still be waking up* | Try again in a moment. If it stays, check `npm run check:proxy` or ask the admin. |
+| *Out of date (…). Ask the admin to redeploy it.* (Settings > Connections) | The connection service is older than this page needs (`SERVICES.lark.min` in `js/config.js`). The admin redeploys it; see its README. |
+| *This address (…) isn't registered on the Lark app* on the login screen | Add that exact address under *Security Settings > Redirect URLs* for the app. |
+| *Your login ended after about 2 hours.* | Log in again. Watch the clock in the header; *Log in again* in Settings renews it early. |
+| *Your login has ended. Log in again.* | Lark said the login is over (it expired, or was ended in Lark). Log in again; your drafts are still there. |
+| *Your login ends at 4:30 PM.* (stays on screen) | Log in again to keep working without a break. |
+| *Your login is about to end, so this wasn't sent.* | Log in again, then try it again. |
+| *Polaris couldn't confirm the save. Refresh before trying again.* | The answer never came back, so the push may have gone through. Polaris looks at Lark again: if it's there you get *It's in Lark.*; if not, push again (the retry can't add a second row). |
+| *Nothing was written. …* | Lark answered with an error, and the rest of the message says why. Fix that and push again. |
+| *These columns don't match what Polaris expects…* | A column was renamed or changed type (common when switching to production). Fix the table, or run `npm run setup` for a missing column or option. |
+| *Your login can only read the tables.* | Log in again so Lark grants editing. |
+| *Lark says your account can't open or edit this Base.* | Ask the Base owner for edit access. |
+| *Your account isn't allowed to change this table (its permissions are restricted).* | Ask the Base owner. |
+| *… is already in the Universe. Someone else already did this.* | Nothing; it was pushed elsewhere. The list refreshed. |
+| *Check these in Lark: …* after a push | A value didn't land as sent. Open the row in Lark and correct it. |
+| *Note: looks like "…" already in the Universe* | Probably a re-filed brief. Ignore it if it's the same project. |
+| *Push this project's brief first.* | Use **Go to the brief**, push it, then the PAR or invoice can go. |
+| *Add this project's PAR to the Universe first.* | Use **Go to the PAR** (if it's listed), push it, then the invoice can go. |
+| *"…" changed since the list was loaded.* | Someone updated that Collections row meanwhile. Nothing was written; the list refreshed, so check the card again. The same message appears for invoice details: the cells you changed were changed in Lark first. |
+| *Someone had already filled …, so those were left as they were.* (after Fill) | The audit only fills blank cells; those weren't blank any more. |
+| Red **Overridden** badge in the top bar | This browser is using another connection service address (Settings > Advanced, or a `?lark=` link). Clear it there, or open the page with `?reset`. |
+| Red *Preview mode* badge | `?preview` is on: the data is a snapshot and nothing is sent to Lark. Open Polaris without `?preview`. |
+| **Ignore** is greyed out on a *Won* card | The Universe has no IGNORE checkbox column yet. Add one (named `IGNORE`, or `npm run setup -- --apply --optional`) to hide won projects that shouldn't go to Collections. |
+| A card would add a new Collections row you think already exists | Pick that row in the sheet instead (rows recorded by hand show *add the number only*), or ignore the card. |
+
+---
+
+## Maintenance recipes
+
+**Add a column the page reads or writes.** Add it to `schemaSpec` in `js/ops.js` (its type, and `options` for
+any select value Polaris writes), use it in `js/sync.js`, add a test, then run `npm run setup` to create it
+in Lark (or add it by hand), and `npm run check:live`.
+
+**A column was renamed in Lark.** Change the name in `schemaSpec` (`js/ops.js`) and wherever `js/sync.js` reads
+it, run `npm test` and `npm run check:live`. Until then the page lists the column as missing and switches pushing off.
+
+**Add a select option Polaris writes** (a new status, say): put it in `RULES` (`js/config.js`) and in the table's
+`options` in `schemaSpec`; `npm run setup -- --apply` adds it to the column in Lark.
+
+**Go live, or back to the test copies.** See [Going live](#going-live): `APP.env` and the links in `TABLES`.
+
+**Point at another Base or table.** Paste the link, exactly as copied from the address bar, into `TABLES.live`
+(or `.test`) in `js/config.js`. Links to a `/wiki/` page are refused: open the Base itself.
+
+**Register a new address** (another port, the hosted page): add it under *Security Settings > Redirect URLs*
+for the Lark app. Polaris says on the login screen if it's missing.
+
+**Add a JavaScript file.** Add it to the `files` list in the loader script of `index.html` (the import map), or
+the page won't start. `npm run check:shell` catches a missing entry.
+
+**The connection service got a new version.** Run `npm run check:proxy`. Only raise `SERVICES.lark.min` in
+`js/config.js` after the proxy itself is deployed.
+
+**Rotate the app secret.** Change it in the Lark developer console and on the connection service's environment,
+then in your `.env`. Nothing in the page changes.
+
+**Refresh the shared files** (`js/ui.js`, `js/icons.js`, `css/mineski-base.css`, `css/theme.css`): change them in the
+design language first, copy them over unedited, then `npm run check:shell` confirms they match.
+
+---
+
+## Files
+
+| File | Purpose |
+| ---- | ------- |
+| `index.html` | The page: the one-time storage move, security metas, the loader and import map, every view, the boot watchdog. |
+| `css/theme.css`, `css/mineski-base.css` | Polaris's colors (light and dark) and the shared Mineski stylesheet: unedited copies of `design-ref/mineski-design-language/assets/themes/polaris.css` and `assets/mineski-base.css`. |
+| `css/app.css` | Only what is Polaris's own: the workspace, the tables' columns and phone layout, the flow line, the audit and the date field. |
+| `img/` | The Polaris icon (SVG, plus PNGs for the favicon, phones and the home screen). |
+| `manifest.webmanifest` | Lets phones add Polaris to the home screen. |
+| `js/config.js` | Everything a maintainer changes: `APP` (name, `env`), `SERVICES`, `LARK` (app id, scopes, API), `TABLES` (live and test links), business rules, the Universe view. |
+| `js/sync.js` | The transfer rules as pure functions: cards, what gets written, the Universe view, read-back checks, fill-blanks and invoice re-check rules, drafts. |
+| `js/ops.js` | Every Lark read and write: column check, full-table loads, pushes with re-check and read-back. |
+| `js/net.js` | The connection service: waking it, retries, timeouts, uploads with progress, ad-blocker detection, dead-token detection. |
+| `js/errors.js` | Errors as facts (`LarkError`), the dead-token codes, and one sentence for every code (`describeLark`). Pure. |
+| `js/service.js` | Which addresses may override the connection service, and whether its `GET /` answer means awake and recent enough. Pure. |
+| `js/settings.js` | The saved connection service address and `?lark=` / `?reset` link overrides (local pages only). |
+| `js/auth.js` | Lark login (OAuth + PKCE), the session, and how a session ends. |
+| `js/app.js` | Routes, header, loading, Settings, the session clock, and what happens after a push. |
+| `js/inbox.js` | The cards, the push sheet (with the BD picker) and Ignore / Undo. |
+| `js/universe.js` | The Universe table. |
+| `js/collections.js` | The Collections table and its invoice details sheet. |
+| `js/icons.js`, `js/ui.js` | The shared Mineski icons and UI helpers: unedited copies of `design-ref/mineski-design-language/assets/`. Change them there, then copy them over. |
+| `js/polaris-ui.js` | Polaris-only helpers on top of `ui.js`: Lark date-only days, the date field, copyable request numbers and project codes in a sentence. |
+| `tools/serve.py` | The dev server: no caching, JavaScript served as JavaScript. |
+| `tools/setup.mjs` | Setup and repair: creates missing columns and select options (dry run by default; only ever adds). |
+| `tools/check-shell.mjs`, `tools/check-proxy.mjs` | `npm run check:shell` and `npm run check:proxy`. |
+| `tests/` | Offline tests (`*.test.mjs`), the live read-only check, the end-to-end check, preview mode, and `lark-node.mjs` (the app's token and a direct `call` for the Node scripts). |
+| `.env.example` | Template for the git-ignored `.env` the admin scripts read. |
+
+Polaris follows the Mineski design language (`.claude/skills/mineski-design-language/`) and the systems design
+(`.claude/skills/mineski-systems-design/`).

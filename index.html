@@ -2,11 +2,51 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <!-- One-time storage move (added Oct 2026; remove after about 3 months). Runs first, before paint
+       and before any module reads storage: the raw "polaris.proxyOverride" becomes
+       "polaris.settings" (JSON), and the login keys become "polaris.auth.*". Each key's format is
+       fixed (never guessed from the value), the new key always wins, and an old key is removed only
+       once its copy reads back the same. Safe to run on every load. -->
+  <script>
+    (function () {
+      function area(name) { try { return window[name + "Storage"]; } catch (e) { return null; } }
+      // Write `value` (as JSON) to `key` unless that key already exists. True when the key now holds a value.
+      function put(s, key, value) {
+        if (s.getItem(key) !== null) return true;
+        var text = JSON.stringify(value);
+        s.setItem(key, text);
+        return s.getItem(key) === text;
+      }
+      // Move one key; `convert` turns the old stored text into the new value (undefined = nothing worth keeping).
+      function move(s, from, to, convert) {
+        try {
+          var old = s.getItem(from);
+          if (old === null) return;
+          var value = convert(old);
+          if (value === undefined || put(s, to, value)) s.removeItem(from);
+        } catch (e) { /* unreadable or storage full: leave the old key for the next load */ }
+      }
+      var json = function (t) { return JSON.parse(t); };
+      var local = area("local"), session = area("session");
+      if (local) {   // raw address → { larkUrl } (a local address only, as before)
+        move(local, "polaris.proxyOverride", "polaris.settings", function (t) { return /^https?:\/\//.test(t) ? { larkUrl: t } : undefined; });
+      }
+      if (session) {
+        move(session, "polaris.token", "polaris.auth.token", json);
+        move(session, "polaris.user", "polaris.auth.user", json);
+        try { session.removeItem("polaris.pending"); } catch (e) { /* a login that was half-done: start over */ }
+      }
+    })();
+  </script>
   <!-- Never cache the page itself. -->
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <!-- Where this page may send data: itself and the hosted connection service (a local
+       address too, for testing on this computer). A login token can't go anywhere else. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://lark-proxy-dwiw.onrender.com http://127.0.0.1:* http://localhost:*; object-src 'none'; base-uri 'self'; form-action 'self'">
   <title>Polaris · Mineski</title>
   <meta name="description" content="Polaris moves new Project Briefs, PARs and invoices into the Universe.">
   <meta name="theme-color" content="#F5F6FA" media="(prefers-color-scheme: light)">
@@ -25,9 +65,9 @@
        imports the same fresh URL. -->
   <script>
     (function () {
-      var v = window.POLARIS_BUILD = Date.now().toString(36);
-      var files = ["js/config.js", "js/sync.js", "js/ops.js", "js/icons.js", "js/ui.js", "js/polaris-ui.js",
-                   "js/net.js", "js/auth.js", "js/inbox.js", "js/universe.js", "js/collections.js", "js/app.js"];
+      var v = window.APP_BUILD = Date.now().toString(36);
+      var files = ["js/config.js", "js/sync.js", "js/ops.js", "js/icons.js", "js/ui.js", "js/polaris-ui.js", "js/errors.js",
+                   "js/service.js", "js/settings.js", "js/net.js", "js/auth.js", "js/inbox.js", "js/universe.js", "js/collections.js", "js/app.js"];
       var map = { imports: {} };
       files.forEach(function (f) { map.imports[new URL(f, location.href).href] = new URL(f + "?v=" + v, location.href).href; });
       document.write('<link rel="stylesheet" href="css/theme.css?v=' + v + '">');
@@ -52,7 +92,7 @@
       <span class="env" id="envBadge" hidden></span>
     </a>
     <div class="top-right">
-      <a class="override-badge" id="overrideBadge" href="#/settings" hidden>Proxy override</a>
+      <a class="override-badge" id="overrideBadge" href="#/settings" hidden>Overridden</a>
       <nav class="nav" aria-label="Main">
         <a href="#/briefs" data-nav="work" id="workLink" hidden>Data Audit</a>
         <a href="#/settings" data-nav="settings" class="nav-icon" aria-label="Settings" title="Settings"><span class="i" data-icon="gear" aria-hidden="true"></span></a>
@@ -204,7 +244,7 @@
           <p class="set-sub" id="envNote"></p>
           <details class="advanced" id="advanced" hidden>
             <summary>Advanced: connection service address</summary>
-            <p class="set-sub">For testing on this computer only. Leave it empty to use the hosted service.</p>
+            <p class="set-sub">For testing on this computer only (for example http://127.0.0.1:8001). Leave it empty to use the hosted service. A <code>?lark=</code> link does the same for one tab; <code>?reset</code> clears it.</p>
             <label class="field">
               <span>Proxy address</span>
               <input type="url" id="proxyInput" spellcheck="false" autocomplete="off">
@@ -218,7 +258,7 @@
 
         <section class="card set-card" aria-labelledby="localTitle">
           <h2 id="localTitle">This browser</h2>
-          <p class="set-sub">Clear the audit cards you hid, the tables' sort order and their collapsed groups. Your login and theme are kept.</p>
+          <p class="set-sub">Clear the audit cards you hid, the tables' sort order, their collapsed groups and unsent drafts. Your login and theme are kept.</p>
           <div class="row"><button type="button" class="btn btn-ghost" id="clearLocal">Clear local data</button></div>
         </section>
       </div>
@@ -288,6 +328,6 @@
     }, 8000);
   </script>
 
-  <script>document.write('<script type="module" src="js/app.js?v=' + window.POLARIS_BUILD + '"><\/script>');</script>
+  <script>document.write('<script type="module" src="js/app.js?v=' + window.APP_BUILD + '"><\/script>');</script>
 </body>
 </html>

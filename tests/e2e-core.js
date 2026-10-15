@@ -1,5 +1,5 @@
 /* End-to-end integrity check. It WRITES to the tables in js/config.js, so it
-   refuses to run unless ENV_LABEL is "Test copy".
+   refuses to run unless APP.env is "test".
 
    Runs in the browser (tests/e2e.html, as the signed-in user, the way the page
    writes) or in Node (tests/e2e.mjs). Using the same ops.js functions as the
@@ -14,7 +14,7 @@
         one new Universe row, one Universe PAR cell, one new Collections row,
         the moved row's changed cells, and nothing else anywhere. */
 
-import { ENV_LABEL, RULES } from "../js/config.js";
+import { APP, RULES } from "../js/config.js";
 import {
   loadEverything, loadFields, loadRecords, selectOptions, getRecord,
   pushBrief, pushPar, pushCollections, pushAndon, writableOnly, setIgnore, AlreadyDone, newClientToken, TABLE_TITLES,
@@ -63,8 +63,8 @@ function diff(before, after) {
 /* `call` = (method, url, body) → Lark JSON; `T` = parsed table links; `log` prints a line.
    Resolves with the number of failed checks. */
 export async function runE2E(call, T, log) {
-  if (ENV_LABEL !== "Test copy") {
-    log(`Refusing to run: js/config.js says ENV_LABEL = "${ENV_LABEL}", not "Test copy".`);
+  if (APP.env !== "test") {
+    log(`Refusing to run: js/config.js says APP.env = "${APP.env}", not "test".`);
     return 1;
   }
   let failures = 0;
@@ -84,7 +84,7 @@ export async function runE2E(call, T, log) {
   }
 
   /* ---------- pick what to push ---------- */
-  log(`E2E against: ${ENV_LABEL}`);
+  log(`E2E against: the ${APP.env} tables`);
   const before = await snapshot();
   log("Snapshot taken: " + Object.entries(before).map(([k, m]) => `${k} ${m.size}`).join(", "));
 
@@ -238,7 +238,7 @@ export async function runE2E(call, T, log) {
 /* ANDON end-to-end: one brief → one new ANDON row, nothing else changed. Run in
    the browser (tests/e2e.html), as the user: the ANDON test Base only opens for users. */
 export async function runAndonE2E(call, T, log) {
-  if (ENV_LABEL !== "Test copy") { log(`Refusing to run: ENV_LABEL is "${ENV_LABEL}", not "Test copy".`); return 1; }
+  if (APP.env !== "test") { log(`Refusing to run: APP.env is "${APP.env}", not "test".`); return 1; }
   let failures = 0;
   const ok = (cond, msg) => { log(`  ${cond ? "✓" : "✗"} ${msg}`); if (!cond) failures++; return cond; };
   const snap = async (k) => {
@@ -248,7 +248,7 @@ export async function runAndonE2E(call, T, log) {
     return { fields, map: new Map(recs.map(r => [r.record_id, Object.fromEntries(
       Object.entries(r.fields || {}).filter(([n]) => !computed.has(n)))])) };
   };
-  log("ANDON E2E against: " + ENV_LABEL);
+  log(`ANDON E2E against: the ${APP.env} tables`);
   const before = { andon: await snap("andon"), brief: await snap("brief") };
   log(`Snapshot taken: andon ${before.andon.map.size}, brief ${before.brief.map.size}`);
 

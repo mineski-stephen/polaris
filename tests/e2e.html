@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Universe Updater · end-to-end check</title>
+<title>Polaris · end-to-end check</title>
 <style>
   body { font: 14px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 20px 16px; background: #f3f4f7; color: #18202e; }
   main { max-width: 860px; margin: 0 auto; }
@@ -27,15 +27,15 @@
 </main>
 <script type="module">
   import { runE2E, runAndonE2E } from "./e2e-core.js";
-  import { TABLE_LINKS, ENV_LABEL } from "../js/config.js";
+  import { APP, TABLE_LINKS } from "../js/config.js";
   import { parseBaseLink } from "../js/ops.js";
+  import { larkUrl } from "../js/settings.js";
 
   const out = document.getElementById("out");
   const log = (line) => { out.textContent += line + "\n"; };
   const read = (area, key) => { try { return JSON.parse(window[area + "Storage"].getItem(key)); } catch { return null; } };
-  const override = (() => { try { return localStorage.getItem("polaris.proxyOverride"); } catch { return null; } })();
-  const proxy = (override || "https://lark-proxy-dwiw.onrender.com").replace(/\/+$/, "");
-  const tok = read("session", "polaris.token");
+  const proxy = larkUrl();   // the hosted service, or the address saved in Settings > Advanced
+  const tok = read("session", "polaris.auth.token");
   const T = Object.fromEntries(Object.entries(TABLE_LINKS).map(([k, l]) => [k, parseBaseLink(l)]));
 
   async function call(method, url, body) {
@@ -51,9 +51,9 @@
   if (!tok || !tok.access_token || tok.expires_at < Date.now() + 60000) {
     btn.disabled = true;
     log("Not logged in (or the login is about to expire). Log in on ../ in this same tab, then come back.");
-  } else if (ENV_LABEL !== "Test copy") {
+  } else if (APP.env !== "test") {
     btn.disabled = true;
-    log(`js/config.js points at "${ENV_LABEL}", not the test copy. This check only runs on the test copy.`);
+    log(`js/config.js has APP.env = "${APP.env}", not "test". This check only runs on the test copy.`);
   }
   let armed = false;
   btn.addEventListener("click", async () => {

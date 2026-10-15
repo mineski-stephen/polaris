@@ -7,10 +7,12 @@
    exactly the same push logic. */
 
 import {
-  indexUniverse, indexCollections, verifyWritten, parAfterAdding, clean, isBlank,
+  indexUniverse, indexCollections, verifyWritten, parAfterAdding, clean, fillPlan, invoiceChangedSince,
 } from "./sync.js";
+import { LARK } from "./config.js";
+import { LarkError } from "./errors.js";
 
-export const OPEN_API = "https://open.larksuite.com/open-apis";
+export const OPEN_API = LARK.api;
 export const PAGE_SIZE = 500;   // Lark's max for records/search
 const MAX_PAGES = 200;          // runaway guard: 100,000 records
 const PAGE_DELAY_MS = 120;      // pause between pages to stay clear of rate limits
@@ -251,16 +253,20 @@ export async function createRecord(call, t, fields, clientToken) {
                                (clientToken ? `?client_token=${encodeURIComponent(clientToken)}` : ""),
                        { fields });
   const rec = j.data && j.data.record;
-  if (!rec || !rec.record_id) throw new Error("Lark didn't return the new record.");
+  // Lark said yes but sent no record: the row is probably there, so this is an unknown outcome.
+  if (!rec || !rec.record_id) throw new LarkError("Lark didn't return the new record.", { uncertain: true });
   return rec;
 }
 
 /* batch_get, not GET …/records/{id}: the single-record GET returns a display
    format (numbers as strings, text unsegmented) that doesn't match what search
    returns or what was written. batch_get returns the same format as search. */
-export async function getRecord(call, t, recordId) {
+export async function findRecord(call, t, recordId) {
   const j = await call("POST", `${tableUrl(t)}/records/batch_get`, { record_ids: [recordId] });
-  const rec = ((j.data && j.data.records) || []).find(r => r.record_id === recordId);
+  return ((j.data && j.data.records) || []).find(r => r.record_id === recordId) || null;
+}
+export async function getRecord(call, t, recordId) {
+  const rec = await findRecord(call, t, recordId);
   if (!rec) throw new Error(`Couldn't read back record ${recordId}.`);
   return rec;
 }
@@ -370,20 +376,30 @@ export async function loadCollections(call, tables, rules) {
 }
 
 /* Invoice details typed in by finance (Invoice Number, SI Number, Invoice Date, the
-   invoice file): writes only what changed, then reads it back. */
-export async function saveInvoiceDetails(call, tables, recordId, patch) {
-  await updateRecord(call, tables.collections, recordId, patch);
-  return { recordId, written: patch, ...await readBack(call, tables.collections, recordId, patch) };
+   invoice file): `row` is the Collections row as the list showed it (collectionRow).
+   The row is re-read first, and nothing is written if a cell being changed was changed
+   in Lark meanwhile. Then it writes only what changed and reads it back. */
+export async function saveInvoiceDetails(call, tables, row, patch) {
+  const now = await findRecord(call, tables.collections, row.id);
+  if (!now) throw new Error("That Collections row no longer exists. Refresh and try again.");
+  const stale = invoiceChangedSince(patch, row, now);
+  if (stale.length) {
+    throw new AlreadyDone(`“${row.arName || "That row"}” changed since the list was loaded.`,
+      `${stale.join(", ")} changed in Lark. Nothing was written; the list has been refreshed.`);
+  }
+  await updateRecord(call, tables.collections, row.id, patch);
+  return { recordId: row.id, written: patch, ...await readBack(call, tables.collections, row.id, patch) };
 }
 
 /* Fill blank cells of a Universe or ANDON row (the audit). The row is re-read
-   first: a cell someone filled meanwhile is left alone (`skipped`), and if
-   nothing is still blank nothing is written. Then it writes, reads back and compares. */
+   first: a cell someone filled meanwhile is left alone (`skipped`; VAT% counts too,
+   see fillPlan), and if nothing is still blank nothing is written. Then it writes,
+   reads back and compares. */
 export async function fillGaps(call, t, recordId, patch) {
-  const now = await getRecord(call, t, recordId);
-  const written = Object.fromEntries(Object.entries(patch).filter(([k]) => k === "VAT%" || isBlank((now.fields || {})[k])));
-  const skipped = Object.keys(patch).filter(k => !(k in written));
-  if (!Object.keys(written).some(k => k !== "VAT%")) {
+  const now = await findRecord(call, t, recordId);
+  if (!now) throw new Error("That row no longer exists. Refresh and try again.");
+  const { written, skipped } = fillPlan(patch, now.fields);
+  if (!Object.keys(written).length) {
     throw new AlreadyDone("Those cells aren't blank anymore.", "Someone filled them meanwhile. Nothing was written; the list has been refreshed.");
   }
   await updateRecord(call, t, recordId, written);

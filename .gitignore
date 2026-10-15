@@ -1,4 +1,8 @@
 # Preview snapshot: real business data, never publish
 tests/.preview-fixture.json
+# The Lark app's secret for the admin scripts (tests/lark-node.mjs, tools/setup.mjs): never commit
+.env
+.env.*
+!.env.example
 # Logo working files and local tooling
 __pycache__/

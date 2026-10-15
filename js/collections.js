@@ -3,11 +3,11 @@
    Number, Invoice Date, the invoice file) from here. */
 
 import { collectionsView, collectionRow, invoiceDetailsPatch, shortName } from "./sync.js";
-import { saveInvoiceDetails, loadCollections } from "./ops.js";
+import { saveInvoiceDetails, loadCollections, AlreadyDone } from "./ops.js";
 import { RULES } from "./config.js";
 import { $, h, ic, fmt, flash, store, recall, toast, copyable, busy } from "./ui.js";
 import { dayOnly, copyableText, dateField } from "./polaris-ui.js";
-import { describe, isDeadToken, uploadToBase } from "./net.js";
+import { describe, isDeadToken, isUncertain, uploadToBase } from "./net.js";
 
 const KEY = { sort: "polaris.colSort", collapsed: "polaris.colCollapsed" };
 const COLUMNS = [
@@ -174,20 +174,28 @@ export function createCollections(ctx) {
 
   async function runSave() {
     if (!edit || edit.busy) return;
-    if (!ctx.ensureTime()) return;
-    const e = edit, r = e.row;
+    const e = edit;
+    // Several uploads can take a while: ask for 2 minutes of login instead of 1.
+    if (!ctx.ensureTime(e.files.filter(f => f.file && !f.file_token).length > 1 ? 120000 : 60000)) return;
     $("#detailsError").hidden = true;
     if (!e.dateOk) {
       $("#detailsError").textContent = "Invoice Date isn't a date Polaris can read. Try Oct 14, 2026, or double-click it to pick one.";
       $("#detailsError").hidden = false;
       return;
     }
+    await ctx.track(() => save_(e));      // the session clock waits for a write that's running
+  }
+
+  async function save_(e) {
+    const r = e.row;
     try {
       // Upload new files first (each once: a retry reuses tokens already returned).
       const fresh = e.files.filter(f => f.file && !f.file_token);
       for (let i = 0; i < fresh.length; i++) {
-        setBusy(true, fresh.length > 1 ? `Uploading ${i + 1} of ${fresh.length}…` : "Uploading…");
-        fresh[i].file_token = await uploadToBase(fresh[i].file, ctx.tables.collections.app, ctx.token());
+        const what = fresh.length > 1 ? `Uploading ${i + 1} of ${fresh.length}` : "Uploading";
+        setBusy(true, `${what}…`);
+        fresh[i].file_token = await uploadToBase(fresh[i].file, ctx.tables.collections, ctx.token(),
+          { onProgress: (p) => setBusy(true, `${what} ${Math.round(p * 100)}%`) });
       }
       setBusy(true, "Saving…");
       const patch = invoiceDetailsPatch(r, {
@@ -195,18 +203,33 @@ export function createCollections(ctx) {
         invoiceDate: e.date, files: e.files,
       });
       if (!Object.keys(patch).length) { setBusy(false); dlg.close(); toast("Nothing changed."); return; }
-      const res = await saveInvoiceDetails(ctx.call, ctx.tables, r.id, patch);
+      const res = await saveInvoiceDetails(ctx.call, ctx.tables, r, patch);
       setBusy(false);
       dlg.close();
       await afterSave(r, res);
     } catch (err) {
       setBusy(false);
-      if (isDeadToken(err)) { dlg.close(); return ctx.sessionEnded(); }
-      $("#detailsError").textContent = `Not saved. ${describe(err)}`;
-      $("#detailsError").hidden = false;
+      if (isDeadToken(err)) { dlg.close(); return; }   // the session already ended (net.js)
+      if (err instanceof AlreadyDone) {                 // someone changed the row in Lark first
+        dlg.close();
+        toast(err.message, { type: "info", detail: err.detail });
+        return refresh(r.id);
+      }
+      const box = $("#detailsError");
+      if (isUncertain(err)) {
+        // It may have landed. Look at the row again, so a retry compares with what Lark has now
+        // (and says "Nothing changed" if the save went through).
+        box.textContent = describe(err);
+        box.hidden = false;
+        await refresh(r.id);
+        const now = (S.data && S.data.collections || []).find(x => x.record_id === r.id);
+        if (edit === e && now) e.row = collectionRow(now);
+        return;
+      }
+      box.textContent = `Not saved. ${describe(err)}`;
+      box.hidden = false;
     }
   }
-
   async function afterSave(r, res) {
     const n = Object.keys(res.written).length;
     if (res.readBackError || res.mismatches.length) {
@@ -225,7 +248,7 @@ export function createCollections(ctx) {
       S.data.collections = await loadCollections(ctx.call, ctx.tables, RULES);
       ctx.recompute();
     } catch (err) {
-      if (isDeadToken(err)) return ctx.sessionEnded();
+      // (a dead login already ended the session in net.js)
     }
     if (highlightId) C.highlight = highlightId;
     ctx.render();

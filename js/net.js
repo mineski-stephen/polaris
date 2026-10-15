@@ -2,37 +2,38 @@
 
    - The proxy sleeps when idle, so it's woken on page load and reads are retried
      while it starts. Writes are never retried automatically.
+   - Reads time out after 60 s, writes after 120 s, uploads after 180 s. A write
+     that times out, or fails on the network, may still have landed: it throws an
+     `uncertain` error and is never reported as "nothing was written".
    - Two instant network failures while online almost always mean an ad blocker
      or privacy extension; that's reported plainly with the host to allow.
-   - A different proxy address is a developer override: it only applies on
-     localhost and is always shown while active. */
+   - A login Lark says is over (a dead-token code) is detected here, once, for
+     every call: the handler set with onDeadToken() ends the session, and the
+     call still throws (err.deadToken) so callers can roll back first.
+   - A different proxy address is a developer override (settings.js): it only
+     applies on localhost and is always shown while active. */
 
 import { sleep } from "./ui.js";
+import { APP, SERVICES, LARK } from "./config.js";
+import { larkUrl } from "./settings.js";
+import { serviceVerdict } from "./service.js";
+import {
+  LarkError, DEAD_TOKEN_CODES, isDeadToken, describeLark, uploadSizeProblem, uploadEntries, uploadToken,
+} from "./errors.js";
 
-export const HOSTED_PROXY = "https://lark-proxy-dwiw.onrender.com";
-const OVERRIDE_KEY = "polaris.proxyOverride";
+export { LarkError, isDeadToken, isUncertain } from "./errors.js";
 
-export const isLocalPage = () => /^(localhost|127\.0\.0\.1|\[::1\]|.+\.localhost)$/.test(location.hostname);
+export const READ_TIMEOUT_MS = 60000;
+export const WRITE_TIMEOUT_MS = 120000;
+export const UPLOAD_TIMEOUT_MS = 180000;
 
-export function proxyOverride() {
-  if (!isLocalPage()) return "";
-  try { return localStorage.getItem(OVERRIDE_KEY) || ""; } catch (e) { return ""; }
-}
-export function setProxyOverride(url) {
-  try {
-    if (url) localStorage.setItem(OVERRIDE_KEY, url); else localStorage.removeItem(OVERRIDE_KEY);
-  } catch (e) {}
-}
-export const proxyBase = () => (proxyOverride() || HOSTED_PROXY).replace(/\/+$/, "");
+export const proxyBase = larkUrl;
 export const proxyHost = () => { try { return new URL(proxyBase()).host; } catch (e) { return proxyBase(); } };
 export const viaProxy = (url) => `${proxyBase()}/proxy?url=${encodeURIComponent(url)}`;
 
-export class LarkError extends Error {
-  constructor(message, extra = {}) { super(message); Object.assign(this, extra); }
-}
-
 /* ---------- connection state (shown in Settings and in load errors) ---------- */
-export const conn = { proxy: "unknown", blocked: false, detail: "", checkedAt: 0 };
+// proxy: unknown | waking | awake | down | outdated
+export const conn = { proxy: "unknown", blocked: false, detail: "", version: "", checkedAt: 0 };
 const listeners = new Set();
 export const onConn = (fn) => { listeners.add(fn); return () => listeners.delete(fn); };
 function setConn(patch) {
@@ -40,11 +41,26 @@ function setConn(patch) {
   listeners.forEach(fn => fn(conn));
 }
 
-/* `timeout` (ms) gives up on a request that never answers (a stuck connection
-   to a sleeping proxy can otherwise wait forever). Only for calls where giving
-   up is safe: reads, wake-up pings and the login code exchange, not writes. */
+let deadHandler = null;
+export const onDeadToken = (fn) => { deadHandler = fn; };
+function flagDead(err, token) {
+  if (token && isDeadToken(err)) { err.deadToken = true; if (deadHandler) deadHandler(err); }
+  return err;
+}
+
+/* Two thrown errors within 600 ms while online: probably a blocker. HTTP answers never count. */
 let quickFails = 0;
-async function send(url, init, timeout = 0) {
+function failed(started) {
+  if (performance.now() - started < 600 && navigator.onLine !== false && ++quickFails >= 2) {
+    setConn({ proxy: "down", blocked: true, detail: "blocked by this browser" });
+  }
+}
+
+/* `timeout` (ms) gives up on a request that never answers (a stuck connection
+   to a sleeping proxy can otherwise wait forever). `write`: the request may have
+   landed when it fails, so the error says so (and a blocked request, which never
+   left, doesn't). */
+async function send(url, init, timeout = 0, write = false) {
   const started = performance.now();
   const ctl = timeout ? new AbortController() : null;
   const timer = ctl && setTimeout(() => ctl.abort(), timeout);
@@ -53,30 +69,31 @@ async function send(url, init, timeout = 0) {
     quickFails = 0;
     return res;
   } catch (e) {
-    if (performance.now() - started < 600 && navigator.onLine !== false && ++quickFails >= 2) {
-      setConn({ proxy: "down", blocked: true, detail: "blocked by this browser" });
-    }
-    throw new LarkError(ctl && ctl.signal.aborted ? "no answer in time" : e.message, { network: true });
+    const timedOut = !!(ctl && ctl.signal.aborted);
+    failed(started);
+    throw new LarkError(timedOut ? "no answer in time" : e.message, { network: true, timedOut, uncertain: write && !conn.blocked });
   } finally {
     clearTimeout(timer);
   }
 }
 
 /* One Lark call through the proxy. Resolves with the JSON body; throws LarkError
-   carrying {network | status, json | raw}. `read` calls are retried while the
-   proxy wakes up (and once after a rate limit). */
-export async function lark(method, url, { token, body, read = false, timeout = 0 } = {}) {
-  const init = { method, headers: {} };
+   carrying {network | status, json | raw, uncertain, deadToken}. `read` calls are
+   retried while the proxy wakes up (and twice after a rate limit); `write` calls
+   never are. Without a `timeout`: 60 s for reads, 120 s for writes. */
+export async function lark(method, url, { token, body, read = false, write = false, timeout } = {}) {
+  const init = { method, headers: {}, cache: "no-store" };
   if (token) init.headers.Authorization = "Bearer " + token;
   if (method !== "GET") {
     init.headers["Content-Type"] = "application/json; charset=utf-8";
     init.body = JSON.stringify(body || {});
   }
+  if (timeout === undefined) timeout = write ? WRITE_TIMEOUT_MS : READ_TIMEOUT_MS;
   const waits = read ? [1500, 3000, 6000, 12000, 20000] : [];
   for (let attempt = 0; ; attempt++) {
     let res;
     try {
-      res = await send(viaProxy(url), init, timeout);
+      res = await send(viaProxy(url), init, timeout, write);
     } catch (e) {
       if (conn.blocked || attempt >= waits.length) throw e;
       setConn({ proxy: "waking", detail: "" });
@@ -88,51 +105,58 @@ export async function lark(method, url, { token, body, read = false, timeout = 0
       await sleep(waits[attempt]);
       continue;
     }
-    if (conn.proxy !== "awake") setConn({ proxy: "awake", blocked: false, detail: "" });
+    if (conn.proxy !== "awake" && conn.proxy !== "outdated") setConn({ proxy: "awake", blocked: false, detail: "" });
     const text = await res.text();
     let json = null;
     try { json = JSON.parse(text); } catch (e) {}
     if (!json || typeof json !== "object") {
-      throw new LarkError(`HTTP ${res.status}, not JSON`, { status: res.status, raw: text.slice(0, 2000) });
+      throw new LarkError(`HTTP ${res.status}, not JSON`, { status: res.status, raw: text.slice(0, 2000), uncertain: write });
     }
     // Lark reports failures in the body (code ≠ 0); bodies without a code are the proxy's own.
     const ok = json.code !== undefined ? Number(json.code) === 0 : !json.error;
     if (ok) return json;
     if (read && [1254290, 99991400].includes(Number(json.code)) && attempt < 2) { await sleep(1200); continue; }
-    throw new LarkError("Lark error", { status: res.status, json });
+    throw flagDead(new LarkError("Lark error", { status: res.status, json, uncertain: write && json.code === undefined && res.status >= 500 }), token);
   }
 }
 
 /* Upload a file as an attachment for a Base (Lark's drive "upload_all", through the
    proxy as multipart). Resolves with the file_token to put in an attachment field.
-   The proxy accepts up to 10 MB. */
-export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
-export async function uploadToBase(file, appToken, token) {
-  if (file.size > MAX_UPLOAD_BYTES) {
-    throw new LarkError("too large", { json: { code: -1, msg: `${file.name} is over 10 MB, the most the connection service takes. Compress it first.` } });
-  }
+   XHR, not fetch, so the page can show progress: onProgress(0..1). Gives up after
+   180 s. Never retried; a failed upload writes nothing, so a retry is safe. */
+export function uploadToBase(file, table, token, { onProgress, timeout = UPLOAD_TIMEOUT_MS } = {}) {
+  const tooBig = uploadSizeProblem(file, LARK.maxUploadMb);
+  if (tooBig) return Promise.reject(new LarkError("too large", { userMessage: tooBig }));
   const fd = new FormData();
-  fd.append("file_name", file.name);
-  fd.append("parent_type", "bitable_file");
-  fd.append("parent_node", appToken);
-  fd.append("size", String(file.size));
+  for (const [k, v] of uploadEntries(file, table)) fd.append(k, v);
   fd.append("file", file, file.name);
-  const res = await send(viaProxy("https://open.larksuite.com/open-apis/drive/v1/medias/upload_all"),
-                         { method: "POST", headers: { Authorization: "Bearer " + token }, body: fd });
-  let json = null;
-  try { json = JSON.parse(await res.text()); } catch (e) {}
-  if (!json || Number(json.code) !== 0 || !json.data || !json.data.file_token) {
-    throw new LarkError("upload failed", json ? { status: res.status, json } : { status: res.status, raw: "" });
-  }
-  return json.data.file_token;
+  return new Promise((resolve, reject) => {
+    const started = performance.now();
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", viaProxy(`${LARK.api}/drive/v1/medias/upload_all`));
+    xhr.timeout = timeout;
+    xhr.setRequestHeader("Authorization", "Bearer " + token);
+    if (onProgress) xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+    xhr.onload = () => {
+      quickFails = 0;
+      try { resolve(uploadToken(xhr.status, xhr.responseText, file.name)); } catch (e) { reject(flagDead(e, token)); }
+    };
+    xhr.onerror = () => { failed(started); reject(new LarkError("network error", { network: true })); };
+    xhr.ontimeout = () => reject(new LarkError("no answer in time", { network: true, timedOut: true }));
+    xhr.send(fd);
+  });
 }
 
-/* Wake the proxy (free Render instances sleep). Resolves true once it answers,
-   false if it stays unreachable for about three minutes. Pings "/" because
-   blockers list paths like /health on onrender.com. */
+/* Wake the proxy (free Render instances sleep). Resolves true once it answers as the
+   Lark proxy, false if it stays unreachable for about three minutes, or answers but
+   is out of date (conn.proxy says which). Pings "/" because blockers list paths like
+   /health on onrender.com. "Awake" is strict: JSON naming the service (Render's
+   "starting" page and a wrong address aren't). */
 let waking = null;
 export function wake() {
-  if (conn.proxy === "awake" && Date.now() - conn.checkedAt < 60000) return Promise.resolve(true);
+  if (Date.now() - conn.checkedAt < 60000 && (conn.proxy === "awake" || conn.proxy === "outdated")) {
+    return Promise.resolve(conn.proxy === "awake");
+  }
   if (waking) return waking;
   waking = (async () => {
     const until = Date.now() + 180000;
@@ -141,9 +165,19 @@ export function wake() {
     try {
       for (;;) {
         try {
-          const res = await send(proxyBase() + "/", { method: "GET" }, 20000);
-          if (res.ok) { setConn({ proxy: "awake", blocked: false, detail: "" }); return true; }
-          if (res.status < 500) { setConn({ proxy: "down", detail: `answered HTTP ${res.status}` }); return false; }
+          const res = await send(proxyBase() + "/", { method: "GET", cache: "no-store" }, 20000);
+          let info = null;
+          try { info = await res.json(); } catch (e) {}
+          const v = serviceVerdict(info, SERVICES.lark);
+          if (res.ok && v.state !== "wrong") {
+            setConn({ proxy: v.state, blocked: false, detail: v.detail, version: v.version });
+            return v.state === "awake";
+          }
+          if (res.ok && info && typeof info === "object" && info.service) {
+            setConn({ proxy: "down", detail: "that address isn't the connection service" });
+            return false;
+          }
+          if (res.status >= 400 && res.status < 500) { setConn({ proxy: "down", detail: `answered HTTP ${res.status}` }); return false; }
         } catch (e) {
           if (conn.blocked) return false;
         }
@@ -160,46 +194,15 @@ export function wake() {
   return waking;
 }
 
-/* Turn a failure into one plain sentence: what happened, and what to do. */
-export function describe(err) {
-  if (!err) return "Something went wrong. Try again.";
-  if (err.name === "AlreadyDone") return err.message;
-  if (conn.blocked) {
-    return `Your browser is blocking ${proxyHost()}, probably an ad blocker or privacy extension. ` +
-           "Allow that site (or pause the blocker on this page), then reload.";
-  }
-  if (err.network) {
-    return `Polaris can't reach its connection service (${proxyHost()}). It may still be waking up; ` +
-           "try again in a moment.";
-  }
-  const j = err.json || {};
-  const code = Number(j.code);
-  if (j.code === undefined && j.error === "not found") {
-    return "The connection service doesn't support Lark login. Check the proxy address in Settings.";
-  }
-  switch (code) {
-    case 20003: case 20004: case 20065: return "That login code expired or was already used. Log in again.";
-    case 20049: return "The login check failed, probably because it started in another tab. Log in again.";
-    case 20071: return "The login came back to a different address than it started from. Log in again.";
-    case 20010: return "Your Lark account isn't allowed to use this app yet. Ask the app admin to add you.";
-    case 20005: case 99991668: case 99991677: return "Your login has ended. Log in again.";
-    case 99991679: return "Your login is missing a permission this needs. Log out, then log in again.";
-    case 91403: return "Lark says your account can't open or edit this Base. Ask its owner for edit access.";
-    case 91402: case 1254003: case 1254040: return "A Base in js/config.js wasn't found. Check the table links.";
-    case 1254004: case 1254041: return "A table in js/config.js wasn't found. Check the table links.";
-    case 1254045: return `A column Polaris uses doesn't exist: ${j.msg}`;
-    case 1254006: case 1254043: return "That record no longer exists. Refresh the list.";
-    case 1254291: return "Lark is busy writing to this table. Wait a moment and try again.";
-    case 1254290: case 99991400: return "Lark is getting too many requests. Wait a moment and try again.";
-  }
-  if (code >= 1254060 && code <= 1254068) return `A value didn't fit its column in Lark: ${j.msg}`;
-  if (/syncTable|ConnectorSyncTable/i.test(j.msg || "")) {
-    return "This table is a synced copy of another table, so Lark won't let anyone add or change its rows. " +
-           "Point Polaris at the table it's synced from (js/config.js).";
-  }
-  if (err.raw !== undefined) return `The connection service answered with an error (HTTP ${err.status}). Try again.`;
-  const msg = j.error_description || j.msg || j.error || err.message;
-  return `Lark said: ${msg}${Number.isNaN(code) ? "" : ` (code ${code})`}`;
-}
+/* The error for a proxy that never woke (or is out of date), for load errors. */
+export const unreachable = () => (conn.proxy === "outdated"
+  ? new LarkError("outdated", { outdated: true, detail: conn.detail })
+  : new LarkError("unreachable", { network: true }));
 
-export const isDeadToken = (err) => !!(err && err.json && [20005, 99991668, 99991677].includes(Number(err.json.code)));
+/* Turn a failure into one plain sentence: what happened, and what to do. */
+export const describe = (err) => describeLark(err, {
+  app: APP.name, host: proxyHost(), blocked: conn.blocked,
+  address: location.origin + location.pathname.replace(/index\.html?$/i, ""),
+});
+
+export { DEAD_TOKEN_CODES };

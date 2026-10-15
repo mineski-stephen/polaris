@@ -13,10 +13,10 @@
   var fixture = function () {
     return fx || (fx = realFetch("tests/.preview-fixture.json?v=" + Date.now()).then(function (r) { return r.json(); }));
   };
-  sessionStorage.setItem("polaris.token", JSON.stringify({
+  sessionStorage.setItem("polaris.auth.token", JSON.stringify({
     access_token: "preview-only", scope: "bitable:app", expires_at: Date.now() + 95 * 60000,
   }));
-  sessionStorage.setItem("polaris.user", JSON.stringify({ name: "Preview Mode", avatar: "", email: "" }));
+  sessionStorage.setItem("polaris.auth.user", JSON.stringify({ name: "Preview Mode", avatar: "", email: "" }));
 
   var seq = 0;
   var reply = function (obj, ms) {
@@ -57,7 +57,7 @@
   window.fetch = async function (input, init) {
     var url = typeof input === "string" ? input : input.url;
     if (/onrender\.com\/?$/.test(url) || /:\d+\/$/.test(url) && !/127\.0\.0\.1:9123/.test(url)) {
-      return reply({ service: "lark-cors-proxy (preview)" }, 120);
+      return reply({ service: "lark-cors-proxy" }, 120);   // what the real proxy calls itself (no version: not checked)
     }
     var m = url.match(/\/proxy\?url=([^&]+)/);
     if (!m) return realFetch(input, init);
@@ -105,9 +105,29 @@
     return reply({ code: 99999, msg: "preview mode: unsupported " + method + " " + target });
   };
 
+  // Uploads go through XHR (for their progress): answer them here, with a made-up file_token.
+  var xhrOpen = XMLHttpRequest.prototype.open, xhrSend = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.open = function (method, url) {
+    this.__preview = /\/proxy\?url=[^&]*upload_all/.test(url);
+    return xhrOpen.apply(this, arguments);
+  };
+  XMLHttpRequest.prototype.send = function () {
+    if (!this.__preview) return xhrSend.apply(this, arguments);
+    var xhr = this, step = 0;
+    var tick = setInterval(function () {
+      step++;
+      if (xhr.upload.onprogress) xhr.upload.onprogress({ lengthComputable: true, loaded: step, total: 4 });
+      if (step < 4) return;
+      clearInterval(tick);
+      Object.defineProperty(xhr, "status", { value: 200 });
+      Object.defineProperty(xhr, "responseText", { value: JSON.stringify({ code: 0, data: { file_token: "preview-file-" + (++seq) } }) });
+      if (xhr.onload) xhr.onload();
+    }, 200);
+  };
+
   document.addEventListener("DOMContentLoaded", function () {
     var b = document.createElement("div");
-    b.className = "override-badge";   // the top bar's red "Proxy override" badge (theme tokens), pinned bottom-left
+    b.className = "override-badge";   // the top bar's red override badge (theme tokens), pinned bottom-left
     b.textContent = "Preview mode: snapshot data, nothing is sent to Lark";
     b.style.cssText = "position:fixed;left:12px;bottom:12px;z-index:200;box-shadow:var(--shadow-md);pointer-events:none";
     document.body.appendChild(b);

@@ -1,23 +1,50 @@
-/* Polaris: which Lark tables it reads and writes, and the business rules it applies.
+/* Polaris: everything a maintainer may change. No secrets: the site is public.
 
-   Production and the test copies differ only in these links and ENV_LABEL. On
+   APP.env picks the tables. Production and the test copies differ only in the
+   links under TABLES (and the "Test copy" badge that follows from APP.env). On
    every load the page re-checks each field it uses (name, type and the select
    options it writes) and refuses to push if anything is missing, so a renamed
-   column fails loudly instead of writing bad data. */
+   column fails loudly instead of writing bad data. Node scripts import this file
+   too, so keep it free of browser APIs. */
 
-export const ENV_LABEL = "";   // shown in the header: "Test copy" for the test copies, "" for production
+export const APP = { name: "Polaris", key: "polaris", env: "live" };   // env: "live" | "test"
+export const ENV_LABEL = APP.env === "test" ? "Test copy" : "";         // shown in the header, never a gate
 
-export const TABLE_LINKS = {
-  universe:    "https://mineskiglobal.larksuite.com/base/NP7TbjwHNaTyLOsWafelN9wNgEd?table=tblEmWYOXoAF70uf&view=vewFlJYfpR",
-  collections: "https://mineskiglobal.larksuite.com/base/NP7TbjwHNaTyLOsWafelN9wNgEd?table=tbln7I51ONseeG55&view=vewZ7gtj5w",
-  brief:       "https://mineskiglobal.larksuite.com/base/NP7TbjwHNaTyLOsWafelN9wNgEd?table=tblu5GcPn9RoCcev&view=vewL6Eydfw",
-  par:         "https://mineskiglobal.larksuite.com/base/NP7TbjwHNaTyLOsWafelN9wNgEd?table=tblFrfsaJZrLLpLQ&view=vewH1nekbn",
-  invoice:     "https://mineskiglobal.larksuite.com/base/NP7TbjwHNaTyLOsWafelN9wNgEd?table=tblnZyLzHXfzrzQt&view=vewO7Hk4IE",
-  // ANDON (Project Management), test copy. Only users can open this Base (the
-  // Lark app itself can't), so the Node checks skip it. Don't use the "ANDON 2026"
-  // table in the base above: it's a synced, read-only mirror.
-  andon:       "https://mineskiglobal.larksuite.com/base/DOoobrd5IaEIwjshAnuuuDFasjg?table=tblS77AM8iHOWd0s&view=vewxixKUQf",
+/* The connection service: the shared Lark proxy (Render). `service` is the name its
+   GET / answers with; `min` and `headers` are checked once it reports a version. */
+export const SERVICES = {
+  lark: { url: "https://lark-proxy-dwiw.onrender.com", service: "lark-cors-proxy", min: "1.0.0", headers: ["Authorization"] },
 };
+
+export const LARK = {
+  appId: "cli_aab0716138b8ded3",
+  scopes: "bitable:app",
+  api: "https://open.larksuite.com/open-apis",
+  authorize: "https://accounts.larksuite.com/open-apis/authen/v1/authorize",
+  maxUploadMb: 10,       // must match the Lark proxy's MAX_BODY_BYTES
+};
+
+/* One Lark link per table, exactly as copied from the address bar. */
+export const TABLES = {
+  live: {
+    universe:    "https://mineskiglobal.larksuite.com/base/NP7TbjwHNaTyLOsWafelN9wNgEd?table=tblEmWYOXoAF70uf&view=vewFlJYfpR",
+    collections: "https://mineskiglobal.larksuite.com/base/NP7TbjwHNaTyLOsWafelN9wNgEd?table=tbln7I51ONseeG55&view=vewZ7gtj5w",
+    brief:       "https://mineskiglobal.larksuite.com/base/NP7TbjwHNaTyLOsWafelN9wNgEd?table=tblu5GcPn9RoCcev&view=vewL6Eydfw",
+    par:         "https://mineskiglobal.larksuite.com/base/NP7TbjwHNaTyLOsWafelN9wNgEd?table=tblFrfsaJZrLLpLQ&view=vewH1nekbn",
+    invoice:     "https://mineskiglobal.larksuite.com/base/NP7TbjwHNaTyLOsWafelN9wNgEd?table=tblnZyLzHXfzrzQt&view=vewO7Hk4IE",
+    // ANDON (Project Management), test copy. Only users can open this Base (the
+    // Lark app itself can't), so the Node checks skip it. Don't use the "ANDON 2026"
+    // table in the base above: it's a synced, read-only mirror.
+    andon:       "https://mineskiglobal.larksuite.com/base/DOoobrd5IaEIwjshAnuuuDFasjg?table=tblS77AM8iHOWd0s&view=vewxixKUQf",
+  },
+  // The test copies. Paste their links here before setting APP.env to "test": an
+  // empty link stops the page at start-up, so it can never fall back to production.
+  test: {
+    universe: "", collections: "", brief: "", par: "", invoice: "",
+    andon:       "https://mineskiglobal.larksuite.com/base/DOoobrd5IaEIwjshAnuuuDFasjg?table=tblS77AM8iHOWd0s&view=vewxixKUQf",
+  },
+};
+export const TABLE_LINKS = TABLES[APP.env];
 
 export const RULES = {
   // Only briefs and invoice requests filed by these departments become cards
