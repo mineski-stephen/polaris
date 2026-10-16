@@ -129,6 +129,11 @@ kbd { font: 600 .78em inherit; padding: 1px 6px; border: 1px solid var(--line-2)
 .brand-name { font-size: 20px; font-weight: 800; letter-spacing: -.03em; }
 .env { font-size: 11px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; white-space: nowrap;
        padding: 3px 8px; border-radius: var(--r-pill); background: var(--warn-soft); color: var(--warn); }
+/* the running version beside the name ("v1.0.0"), quiet so it never competes with the brand.
+   Filled from APP.version at start-up; stays on small phones, where the name hides. */
+.brand-ver { align-self: flex-end; margin: 0 0 3px -4px; font-size: 11.5px; font-weight: 700; color: var(--muted);
+             font-variant-numeric: tabular-nums; white-space: nowrap; }
+.brand-ver:empty { display: none; }
 .top-right { display: flex; align-items: center; gap: 8px; min-width: 0; }
 
 /* pill navigation in the top bar (2 to 4 destinations) */

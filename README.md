@@ -583,7 +583,7 @@ the live tables.
 | You see | What to do |
 | ------- | ---------- |
 | *Polaris couldn't start.* | Reload. If it keeps happening, open Polaris from its web address (not a saved file). If you just deployed, a file is probably missing or not listed in the import map in `index.html`: run `npm run check:shell`. |
-| People report an old version | The page and every script are fetched fresh on each visit, so this is almost always the host's own cache (GitHub Pages can take a few minutes after a push) or an old tab left open. Reload the tab; in the browser console, `APP_BUILD` changes on each load. Check the files on the host are the new ones. |
+| People report an old version (the number beside "Polaris" in the top bar is lower than the newest entry in `CHANGELOG.md`) | The page and every script are fetched fresh on each visit, so this is almost always the host's own cache (GitHub Pages can take a few minutes after a push) or an old tab left open. Reload the tab; in the browser console, `APP_BUILD` changes on each load. Check the files on the host are the new ones. |
 | *Waking up the connection… This can take up to a minute.* | Nothing; the free Render service is starting. It retries for up to 3 minutes. |
 | *Polaris can't reach its connection service.* (red box, mentions an ad blocker) | Allow `lark-proxy-dwiw.onrender.com` in your ad blocker or privacy extension (or pause it on this page), then **Reload**. |
 | *Polaris can't reach its connection service (…). It may still be waking up* | Try again in a moment. If it stays, check `npm run check:proxy` or ask the admin. |
@@ -622,6 +622,13 @@ the live tables.
 
 ## Maintenance recipes
 
+**Release a change.** Every change people will see gets a version. Bump `APP.version` in
+`js/config.js` (patch for a fix, minor for something new, major when people must relearn something or old
+links or data stop working), add an entry with the same number and the date at the top of `CHANGELOG.md`
+saying what changed in the team's words, and run `npm run check:shell` (it fails if the two numbers
+differ). The top bar shows the version beside the name, so people can check at a glance that they have the
+latest one; if they don't, they reload the page.
+
 **Add a column the page reads or writes.** Add it to `schemaSpec` in `js/ops.js` (its type, and `options` for
 any select value Polaris writes), use it in `js/sync.js`, add a test, then run `npm run setup` to create it
 in Lark (or add it by hand), and `npm run check:live`.
@@ -658,12 +665,13 @@ design language first, copy them over unedited, then `npm run check:shell` confi
 
 | File | Purpose |
 | ---- | ------- |
+| `CHANGELOG.md` | Every change and version update, newest first. Its top entry matches `APP.version`, which the top bar shows beside the name. |
 | `index.html` | The page: the one-time storage move, security metas, the loader and import map, every view, the boot watchdog. |
 | `css/theme.css`, `css/mineski-base.css` | Polaris's colors (light and dark) and the shared Mineski stylesheet: unedited copies of `design-ref/mineski-design-language/assets/themes/polaris.css` and `assets/mineski-base.css`. |
 | `css/app.css` | Only what is Polaris's own: the workspace, the tables' columns, the flow line, the audit, the push sheet and its row, the queue, and the date field. |
 | `img/` | The Polaris icon (SVG, plus PNGs for the favicon, phones and the home screen). |
 | `manifest.webmanifest` | Lets phones add Polaris to the home screen. |
-| `js/config.js` | Everything a maintainer changes: `APP` (name, `env`), `SERVICES`, `LARK` (app id, scopes, API), `TABLES` (live and test links), business rules, the Universe view. |
+| `js/config.js` | Everything a maintainer changes: `APP` (name, `version`, `env`), `SERVICES`, `LARK` (app id, scopes, API), `TABLES` (live and test links), business rules, the Universe view. |
 | `js/sync.js` | The transfer rules as pure functions: cards, what gets written, the Universe view, read-back checks, fill-blanks and invoice re-check rules, drafts. |
 | `js/ops.js` | Every Lark read and write: column check, full-table loads, pushes with re-check and read-back. |
 | `js/net.js` | The connection service: waking it, retries, timeouts, uploads with progress, ad-blocker detection, dead-token detection. |

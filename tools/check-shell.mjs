@@ -85,6 +85,16 @@ function run() {
   ok(/<meta name="referrer"/.test(html), "referrer meta");
   ok(/<meta http-equiv="Content-Security-Policy"/.test(html), "CSP meta");
 
+  console.log("Version");
+  const version = (readFileSync(join(ROOT, "js", "config.js"), "utf8").match(/\bversion:\s*"(\d+\.\d+\.\d+)"/) || [])[1];
+  const logged = existsSync(join(ROOT, "CHANGELOG.md")) &&
+    (readFileSync(join(ROOT, "CHANGELOG.md"), "utf8").match(/^## (\d+\.\d+\.\d+)/m) || [])[1];
+  if (ok(!!version, version ? `APP.version is ${version}` : "APP.version (x.y.z) is in js/config.js")) {
+    ok(logged === version, logged ? (logged === version ? "CHANGELOG.md's newest entry matches it"
+      : `CHANGELOG.md's newest entry is ${logged}, not ${version}`) : "CHANGELOG.md has a \"## x.y.z\" entry");
+  }
+  ok(/id="appVersion"/.test(html), "the top bar shows the version (#appVersion)");
+
   console.log("Syntax");
   const tools = readdirSync(join(ROOT, "tools")).filter(f => f.endsWith(".mjs")).map(f => `tools/${f}`);
   const tests = readdirSync(join(ROOT, "tests")).filter(f => /\.(m?js)$/.test(f)).map(f => `tests/${f}`);

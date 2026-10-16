@@ -7,7 +7,9 @@
    column fails loudly instead of writing bad data. Node scripts import this file
    too, so keep it free of browser APIs. */
 
-export const APP = { name: "Polaris", key: "polaris", env: "live" };   // env: "live" | "test"
+/* version: bump it with every release and add an entry to CHANGELOG.md (newest first, same number).
+   The top bar shows it beside the name, so people can see at a glance which version they're running. */
+export const APP = { name: "Polaris", key: "polaris", version: "1.0.0", env: "live" };   // env: "live" | "test"
 export const ENV_LABEL = APP.env === "test" ? "Test copy" : "";         // shown in the header, never a gate
 
 /* The connection service: the shared Lark proxy (Render). `service` is the name its
