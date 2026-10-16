@@ -28,7 +28,6 @@ export function createQueue(ctx, inbox) {
   const { S } = ctx;
   const Q = S.queue = { items: queueFromJSON(recall("local", KEY)), paused: "", running: null };
   let seq = Q.items.reduce((n, it) => Math.max(n, Number(String(it.id).replace(/\D/g, "")) || 0), 0);
-  const touched = new Set();            // tables written since the queue was last empty
   let closeAttention = null;            // the one toast that points at failures and warnings
   let warnedLogin = false;
 
@@ -53,8 +52,8 @@ export function createQueue(ctx, inbox) {
   }
 
   /* Is this card waiting in the queue (so it's left the list)? */
-  const hides = (c) => Q.items.some(it => it.state !== "done" && it.cardId === c.id && (it.step || "") === (c.step || "")
-                                          && it.kind === c.kind);
+  const hides = (c) => Q.items.some(it => (it.state !== "done" || it.alreadyDone) && it.cardId === c.id
+                                          && (it.step || "") === (c.step || "") && it.kind === c.kind);
 
   /* ---------------------------------------------------------------- running */
   async function pump() {
@@ -82,13 +81,13 @@ export function createQueue(ctx, inbox) {
     try {
       const out = await ctx.track(() => inbox.perform(card, it.job, { onStatus: (t) => { it.status = t; paintRow(it); } }));
       it.recordId = out.res.recordId;
-      const report = await ctx.afterPush(card, out.res, out.payload, out.extra, { quiet: true });
-      touched.add(report.dest);
-      finish(it, "done", report);
+      finish(it, "done", await ctx.afterPush(card, out.res, out.payload, out.extra));
     } catch (err) {
       if (err instanceof AlreadyDone) {
+        // Already in Lark. The list isn't reloaded (nothing refreshes on its own), so
+        // its card stays out of the list until the next Refresh.
+        it.alreadyDone = true;
         finish(it, "done", { title: err.message, detail: "", warn: false });
-        touched.add("lists");
       } else if (isDeadToken(err)) {
         it.state = "waiting";           // Lark refused the login, so nothing was written: it runs after Log in again
         pause("login");
@@ -139,14 +138,9 @@ export function createQueue(ctx, inbox) {
     attention();
   }
 
-  async function drained() {
-    paint();
-    if (!touched.size) return;
-    const dests = new Set(touched);
-    touched.clear();
-    if (dests.has("lists")) return ctx.loadData({ quiet: true });
-    await ctx.afterQueue(dests);
-  }
+  // Nothing is reloaded when the queue empties: the lists only change when a push
+  // lands (its card leaves) or when the person presses Refresh.
+  const drained = () => paint();
 
   function pause(reason) {
     Q.paused = reason;

@@ -3,7 +3,7 @@
    transfer rules in sync.js and every Lark read/write in ops.js. */
 
 import { APP, ENV_LABEL, TABLE_LINKS, RULES, SERVICES } from "./config.js";
-import { parseBaseLink, loadEverything, loadUniverse, selectOptions, TABLE_TITLES, computedTypes } from "./ops.js";
+import { parseBaseLink, loadEverything, selectOptions, TABLE_TITLES, computedTypes } from "./ops.js";
 import {
   indexUniverse, indexCollections, briefCards, parCards, collectionCards, stepStatus, peoplePool, pmPool, auditCards, briefsByCode,
   draftsToJSON, draftsFromJSON,
@@ -21,7 +21,6 @@ const tables = Object.fromEntries(Object.entries(TABLE_LINKS).map(([k, link]) =>
 const KEY = { theme: "polaris.theme", tab: "polaris.tab", draft: "polaris.draft" };
 // What "Clear local data" forgets: views, hidden cards and unsent drafts, never the login or the theme.
 const LOCAL_KEYS = ["polaris.auditHidden", "polaris.uniSort", "polaris.uniCollapsed", "polaris.colSort", "polaris.colCollapsed", KEY.draft];
-const STALE_AFTER_MS = 5 * 60 * 1000;    // reload when the page comes back after this long
 const LOW_SESSION_MS = 10 * 60 * 1000;
 
 /* What was typed in a push sheet that was cancelled, with its client_token. Kept in
@@ -114,7 +113,6 @@ const ctx = {
   sessionEnded: (m) => auth.end(m),
   track: (work) => track(work),
   afterPush: (c, res, payload, extra) => afterPush(c, res, payload, extra),
-  afterQueue: (dests) => afterQueue(dests),
   msLeft: () => auth.msLeft(),
   signedIn: () => !!auth.currentToken(),
   login: (returnTo) => login(returnTo),
@@ -352,22 +350,11 @@ function recompute() {
   S.colStatusOrder = selectOptions(field("collections", "Status"));
 }
 
-/* The Universe again, straight from Lark, so the table shows what's really there. */
-async function refreshUniverse() {
-  try {
-    S.data.universe = await loadUniverse(call, tables, RULES);
-    recompute();
-    return true;
-  } catch (err) {
-    return false;   // (a dead login already ended the session in net.js)
-  }
-}
-
 /* ======================= after a push ======================= */
 /* Every push runs in the queue (js/queue.js). Update the local copy at once (the
    card leaves, dependent cards move on) and report what Lark confirmed as
-   { title, detail, warn, dest } for the queue to list. The tables are re-read once
-   the queue is empty (afterQueue), not after every push. */
+   { title, detail, warn, dest } for the queue to list. Nothing is re-read from Lark
+   afterwards: the lists and tables only reload when the person presses Refresh. */
 function afterPush(c, res, payload, extra = {}) {
   const d = S.data;
   if (c.kind === "audit") return afterFill(c, res);
@@ -425,15 +412,6 @@ function afterFill(c, res) {
     return { title, dest: t, warn: true, detail: `Check these in Lark: ${list}. ${skipped}`.trim() };
   }
   return { title, dest: t, warn: false, detail: skipped };
-}
-
-/* After the queue has emptied: re-read the tables it wrote to, once, so the views
-   show what Lark really has (formulas, lookups, other people's edits). */
-async function afterQueue(dests) {
-  if (!S.data) return;
-  if (dests.has("collections")) await collections.refresh();
-  if (dests.has("universe")) await refreshUniverse();
-  render();
 }
 
 /* What a Collections push did, in a sentence. */
@@ -592,11 +570,7 @@ window.addEventListener("beforeunload", (e) => { if (inflight) { e.preventDefaul
 matchMedia("(min-width: 1280px)").addEventListener("change", () => render());
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") return;
-  tickSession();
-  // Back on the page after a while (common on a phone): pick up what changed meanwhile.
-  if (S.view === "work" && S.data && !S.loading && !$("#sheet").open && Date.now() - S.loadedAt > STALE_AFTER_MS) {
-    loadData({ quiet: true });
-  }
+  tickSession();      // the login clock only: the lists never reload on their own (Refresh does that)
 });
 setInterval(tickSession, 20000);
 

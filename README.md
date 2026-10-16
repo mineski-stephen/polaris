@@ -109,7 +109,8 @@ have hundreds of cards) can be reviewed without stopping.
 - **When the login runs low** (under a minute), the queue stops and says so, with
   **Log in again**. **Pause** / **Resume** on the queue page stop and restart it by hand.
 - Closing the tab while pushes are waiting asks first.
-- The tables are re-read once when the queue is empty, not after every push.
+- Nothing reloads on its own: the lists and tables change only when a push lands
+  (its card leaves, and the cards waiting on it move on) or when you press **Refresh**.
 
 ---
 
@@ -300,9 +301,8 @@ years*), **Lost, Stalled and Archived hidden**, sorted by **RFP Received Date**
 (newest first; click the column to flip it). Columns: Client, Project, Amount
 (VAT-Ex.) (PHP), BD, AM, Project Code, RFP Received Date. Groups can be folded.
 
-Shown beside the cards on wide screens only. When the queue empties, Polaris
-re-reads the Universe from Lark (not just its own copy), so the rows you see are
-what's really there.
+Shown beside the cards on wide screens only. Pushed rows appear as they land; the
+table re-reads Lark (formulas, other people's edits) when you press **Refresh**.
 
 ---
 
@@ -397,7 +397,7 @@ Node tools (with the app's token, straight to Lark), because both hand it a `cal
 - **Every column is checked on load** (name, type, and the select options Polaris
   writes). If anything doesn't match, pushing is switched off and the problem is listed.
 - **The destination is re-read just before every push.** If it's already there
-  (someone else pushed it), nothing is written and the list refreshes. A
+  (someone else pushed it), nothing is written and the push says so. A
   Collections change also checks its row still says what the card saw (same
   Status, same request number) and that no other row took the request meanwhile.
   Invoice details do the same for the cells you are changing, and the audit
@@ -605,7 +605,7 @@ the live tables.
 | *Your login can only read the tables.* | Log in again so Lark grants editing. |
 | *Lark says your account can't open or edit this Base.* | Ask the Base owner for edit access. |
 | *Your account isn't allowed to change this table (its permissions are restricted).* | Ask the Base owner. |
-| *… is already in the Universe. Someone else already did this.* | Nothing; it was pushed elsewhere. The list refreshed. |
+| *… is already in the Universe. Someone else already did this.* | Nothing; it was pushed elsewhere. Press **Refresh** to see the list as Lark has it. |
 | *Check these in Lark: …* after a push | A value didn't land as sent. Open the row in Lark and correct it. |
 | *Note: looks like "…" already in the Universe* | Probably a re-filed brief. Ignore it if it's the same project. |
 | *Push this project's brief first.* | Use **Go to the brief**, push it, then the PAR or invoice can go. |
