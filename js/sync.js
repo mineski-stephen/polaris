@@ -512,6 +512,23 @@ export function isWonProject(fields, rules) {
   return r.statuses.some(s => s.trim() === status) || r.mancomPhases.some(p => p.trim() === phase);
 }
 
+/* The Month a Sign Date falls in, in the Month column's own type (`def`): a date
+   is midnight on the 1st in the Base's zone; a select is the option for that month
+   ("June 2026" or "June", as the column spells it); text is "June 2026". */
+export function monthOf(signMs, def, rules) {
+  if (typeof signMs !== "number" || Number.isNaN(signMs)) return null;
+  const off = rules.utcOffsetHours * 3600000, d = new Date(signMs + off);
+  const y = d.getUTCFullYear(), m = d.getUTCMonth(), name = MONTHS[m];
+  const type = def ? def.type : 5;
+  if (type === 5) return Date.UTC(y, m, 1) - off;
+  if (type === 3) {
+    const options = ((def.property && def.property.options) || []).map(o => o.name);
+    return matchOption(`${name} ${y}`, options) || matchOption(name, options) || matchOption(name.slice(0, 3), options);
+  }
+  if (type === 1) return `${name} ${y}`;
+  return null;
+}
+
 /* The required columns a Fill would still leave blank: refused while any are. */
 export function auditMissing(card, patch) {
   return (card.required || []).filter(k => isBlank(patch[k]));
@@ -574,6 +591,14 @@ export function auditPatch(card, row, choices, rules, { options, fields } = {}) 
     if (!isBlank(v)) out[k] = typeof v === "string" ? v.replace(/\r\n?/g, "\n").trim() : v;
   }
   if (card.needsVat && "Amount (VAT-Ex.) (PHP)" in out) out["VAT%"] = choices.vat || defaultVat(card.brief.currency);
+  // Month defaults from the Sign Date (typed in the sheet, or already on the row).
+  const mo = rules.auditRequired && rules.auditRequired.month;
+  if (mo && (card.required || []).includes(mo.field) && isBlank(choices.values && choices.values[mo.field])) {
+    const sign = choices.values && !isBlank(choices.values[mo.from]) ? choices.values[mo.from] : num((row.fields || {})[mo.from]);
+    const def = (fields || []).find(f => f.field_name === mo.field);
+    const month = monthOf(sign, def, rules);
+    if (month !== null && month !== undefined) out[mo.field] = month;
+  }
   // A required column is always written: it can't be unticked (the sheet keeps it ticked).
   for (const k of card.required || []) {
     const v = choices.values && choices.values[k];

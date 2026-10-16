@@ -92,6 +92,8 @@ export const RULES = {
     statuses: ["Fully Closed", "For Closing", "For Collection", "Signed CE", "Won - Awaiting CE Signature"],
     mancomPhases: ["7. Won"],
     fields: ["Sign Date", "Month"],
+    // Month defaults to the 1st of the Sign Date's month (until it's changed by hand).
+    month: { field: "Month", from: "Sign Date" },
   },
 
   // Date-only fields (RFP Received Date) are stored as midnight in this offset.

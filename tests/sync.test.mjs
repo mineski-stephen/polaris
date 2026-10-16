@@ -9,7 +9,7 @@ import {
   indexUniverse, indexCollections, briefCards, parCards, collectionCards, collectionsChange,
   universeFromBrief, verifyWritten, similarity, vatMentions,
   peoplePool, universeView, shortName, andonFromBrief, collectionsView, collectionRow, invoiceDetailsPatch,
-  auditCards, auditPatch, parseDay, fillPlan, invoiceChangedSince, draftsToJSON, draftsFromJSON, queueToJSON, queueFromJSON, cellText, isWonProject, auditMissing,
+  auditCards, auditPatch, parseDay, fillPlan, invoiceChangedSince, draftsToJSON, draftsFromJSON, queueToJSON, queueFromJSON, cellText, isWonProject, auditMissing, monthOf,
 } from "../js/sync.js";
 import { writableOnly } from "../js/ops.js";
 
@@ -759,8 +759,8 @@ test("audit: a won project must have Sign Date and Month; the Fill is refused wh
 
   // the Fill: refused while a required column is blank, whatever else is ticked
   const sign = 1791000000000;
-  const half = auditPatch(by.w1, rows[0], { fields: by.w1.gaps, values: { "Sign Date": sign } }, RULES);
-  assert.deepEqual(auditMissing(by.w1, half), ["Month"]);
+  const half = auditPatch(by.w1, rows[0], { fields: by.w1.gaps, values: { "Month": "" } }, RULES);
+  assert.deepEqual(auditMissing(by.w1, half), ["Sign Date", "Month"]);   // no Sign Date, so no Month to default to
   const none = auditPatch(by.w1, rows[0], { fields: [] }, RULES);          // unticking can't drop them
   assert.deepEqual(auditMissing(by.w1, none), ["Sign Date", "Month"]);
   const full = auditPatch(by.w1, rows[0], { fields: by.w1.gaps, values: { "Sign Date": sign, "Month": " October " } }, RULES);
@@ -769,4 +769,32 @@ test("audit: a won project must have Sign Date and Month; the Fill is refused wh
   assert.equal(full["Month"], "October");
   const onlyMonth = auditPatch(by.w2, rows[1], { fields: ["Month"], values: { "Month": "November" } }, RULES);
   assert.deepEqual(onlyMonth, { "Month": "November" });             // nothing from a brief it doesn't have
+});
+
+test("audit: Month defaults to the 1st of the Sign Date's month, in the Month column's own type", () => {
+  const manila = (y, m, d) => Date.UTC(y, m, d) - 8 * 3600000;          // midnight in Manila
+  const signed = manila(2026, 5, 17) + 15 * 3600000;                    // Jun 17, 2026, 3 PM Manila
+  // the column's type decides the value
+  assert.equal(monthOf(signed, { field_name: "Month", type: 5 }, RULES), manila(2026, 5, 1));
+  assert.equal(monthOf(manila(2026, 0, 1), { type: 5 }, RULES), manila(2026, 0, 1));      // the 1st itself (not the day before in UTC)
+  assert.equal(monthOf(manila(2026, 11, 31) + 23 * 3600000, { type: 5 }, RULES), manila(2026, 11, 1));
+  const opts = (...names) => ({ type: 3, property: { options: names.map(name => ({ name })) } });
+  assert.equal(monthOf(signed, opts("May 2026", "June 2026"), RULES), "June 2026");
+  assert.equal(monthOf(signed, opts("May", "June"), RULES), "June");
+  assert.equal(monthOf(signed, opts("Q1", "Q2"), RULES), null);              // no such option: left for a person
+  assert.equal(monthOf(signed, { type: 1 }, RULES), "June 2026");
+  assert.equal(monthOf(null, { type: 5 }, RULES), null);
+
+  const fields = [{ field_name: "Sign Date", type: 5 }, { field_name: "Month", type: 5 }];
+  const card = { kind: "audit", target: "universe", gaps: ["Sign Date", "Month"], required: ["Sign Date", "Month"], brief: null };
+  // a Sign Date typed in the sheet
+  const typed = auditPatch(card, { fields: {} }, { fields: card.gaps, values: { "Sign Date": signed } }, RULES, { fields });
+  assert.deepEqual(typed, { "Sign Date": signed, "Month": manila(2026, 5, 1) });
+  assert.deepEqual(auditMissing(card, typed), []);
+  // a Sign Date already on the row (only Month is missing)
+  const onRow = { ...card, gaps: ["Month"], required: ["Month"] };
+  assert.deepEqual(auditPatch(onRow, { fields: { "Sign Date": signed } }, { fields: ["Month"] }, RULES, { fields }), { "Month": manila(2026, 5, 1) });
+  // a Month picked by hand wins
+  const picked = manila(2026, 6, 1);
+  assert.equal(auditPatch(card, { fields: {} }, { fields: card.gaps, values: { "Sign Date": signed, "Month": picked } }, RULES, { fields })["Month"], picked);
 });

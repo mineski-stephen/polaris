@@ -272,7 +272,9 @@ is *Fully Closed*, *For Closing*, *For Collection*, *Signed CE* or *Won - Awaiti
 Signature*, or whose Mancom Phase is *7. Won*, gets a card when either is blank,
 even without a brief (no brief has them, so you type them in). They can't be
 unticked, and the Fill is refused while either is still blank (*A won project needs
-Sign Date and Month.*). The statuses, phases and columns are `auditRequired` in
+Sign Date and Month.*). **Month** starts as the 1st of the Sign Date's month (the
+Sign Date on the row, or the one you type; it follows the Sign Date until you change
+Month yourself). The statuses, phases and columns are `auditRequired` in
 [`js/config.js`](js/config.js); if the Universe has no column by that name, audit
 pushes to the Universe stop and the column check says which one is missing.
 

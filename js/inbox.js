@@ -5,7 +5,7 @@ import { RULES } from "./config.js";
 import { TABLE_TITLES, pushBrief, pushPar, pushCollections, pushAndon, setIgnore, newClientToken, writableOnly, fillGaps } from "./ops.js";
 import {
   universeFromBrief, collectionsChange, stepStatus, parAfterAdding, defaultVat, vatMentions,
-  people, andonFromBrief, auditPatch, auditMissing,
+  people, andonFromBrief, auditPatch, auditMissing, monthOf,
 } from "./sync.js";
 import { $, h, ic, toast, fmt, flash, copyable, store, collapse, busy, radioKeys } from "./ui.js";
 import { copyableText, dateField } from "./polaris-ui.js";
@@ -309,7 +309,8 @@ export function createInbox(ctx) {
   /* ======================= the audit: blanks the brief can fill ======================= */
   const AUDIT_WHERE = { universe: "Universe", andon: "ANDON" };
   const auditRow = (c) => (S.data[c.target] || []).find(r => r.record_id === c.rowId) || { fields: {} };
-  const auditOpts = (c) => (c.target === "andon" ? { options: ctx.optionsOf("andon"), fields: ctx.fieldsOf("andon") } : {});
+  // The table's options and columns (ANDON's select spellings; the type of a column like Month).
+  const auditOpts = (c) => ({ options: ctx.optionsOf(c.target), fields: ctx.fieldsOf(c.target) });
   const AUDIT_DATES = new Set(["Project Start", "Project End", "RFP Received Date", "Event Start", "Event End"]);
 
   function auditCardEl(c) {
@@ -386,11 +387,23 @@ export function createInbox(ctx) {
 
     // One row per blank: tick box, name, and an editor that fits the column.
     const tick = {};
+    const editors = {};
+    const mo = RULES.auditRequired.month;
     const changed = (k, v, ok = true) => {
       ch.values[k] = v;
       if (!ch.edited.includes(k)) ch.edited.push(k);
       ch.bad = ok ? ch.bad.filter(x => x !== k) : [...new Set([...ch.bad, k])];
       if (!ch.fields.includes(k)) { ch.fields.push(k); tick[k].checked = true; }
+      // A new Sign Date moves Month to its month, unless Month was changed by hand.
+      if (mo && k === mo.from && ok && v !== null && editors[mo.field] && !ch.edited.includes(mo.field)) {
+        const month = monthOf(v, ctx.fieldsOf(c.target).find(f => f.field_name === mo.field), RULES);
+        if (month !== null && month !== undefined) {
+          ch.values[mo.field] = month;
+          const fresh = editor(mo.field);
+          editors[mo.field].replaceWith(fresh);
+          editors[mo.field] = fresh;
+        }
+      }
       refresh();
     };
     let amountInput = null;
@@ -449,9 +462,10 @@ export function createInbox(ctx) {
         ch.fields = box.checked ? [...ch.fields, k] : ch.fields.filter(x => x !== k);
         refresh();
       });
+      editors[k] = editor(k);
       return h("div", { class: "gap" },
         h("label", { class: "gap-head", for: box.id }, box, h("b", null, k)),
-        editor(k));
+        editors[k]);
     });
     if (c.needsVat) {
       const seg = h("div", { class: "chips", role: "radiogroup", "aria-label": "VAT" },
