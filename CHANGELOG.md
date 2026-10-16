@@ -15,6 +15,7 @@ two numbers differ.
   or the queue finishing, doesn't reload them any more, so cards don't move while
   you're working; press **Refresh** to see what changed in Lark. A pushed card still
   leaves its list as soon as you push it.
+- A card sliding out of the list no longer flashes a sideways scrollbar.
 
 ## 1.0.0 · Oct 16, 2026
 
