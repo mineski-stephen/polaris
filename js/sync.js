@@ -503,9 +503,26 @@ function fromBrief(target, brief, row, rules, { vat, options, fields } = {}) {
 }
 const AUDIT_COMPUTED = new Set([18, 19, 20, 21, 24, 1001, 1002, 1003, 1004, 1005]);
 
+/* A won Universe project (rules.auditRequired: by Status or Mancom Phase): it
+   must have Sign Date and Month, which no brief has, so a person fills them. */
+export function isWonProject(fields, rules) {
+  const r = rules.auditRequired;
+  if (!r) return false;
+  const status = clean(fields["Status"]), phase = clean(fields["Mancom Phase"]);
+  return r.statuses.some(s => s.trim() === status) || r.mancomPhases.some(p => p.trim() === phase);
+}
+
+/* The required columns a Fill would still leave blank: refused while any are. */
+export function auditMissing(card, patch) {
+  return (card.required || []).filter(k => isBlank(patch[k]));
+}
+
 /* Every row in `records` (Universe or ANDON, `target`) with gaps its brief can
-   fill. `hide` = keys of cards hidden on this device. `options`/`fields` = ANDON's
-   select options and columns (only typed columns are ever written).
+   fill, and, in the Universe, every won project missing a required column
+   (`required`, filled by a person; such a row gets a card even without a brief).
+   `hide` = keys of cards hidden on this device. `options`/`fields` = the table's
+   select options and columns (only typed columns are ever written; a required
+   column the table doesn't have isn't asked for).
    Returns { cards, hidden: { noBrief, hidden } }. */
 export function auditCards(target, records, briefs, rules, { hide = new Set(), options, fields, byCode } = {}) {
   const briefFor = byCode || briefsByCode(briefs, rules);
@@ -515,21 +532,24 @@ export function auditCards(target, records, briefs, rules, { hide = new Set(), o
     const f = row.fields || {};
     const code = normCode(plain(f["Project Code"]));
     if (!code) continue;
+    const has = fields ? new Set(fields.map(d => d.field_name)) : null;
+    const required = target === "universe" && isWonProject(f, rules)
+      ? rules.auditRequired.fields.filter(k => (!has || has.has(k)) && isBlank(f[k])) : [];
     const b = briefFor.get(code);
-    if (!b) { hidden.noBrief++; continue; }
-    const brief = briefAsCard(b);
-    const want = fromBrief(target, brief, row, rules, { options, fields });
-    const gaps = Object.keys(want).filter(k => !AUDIT_SKIP[target].has(k) && isBlank(f[k]));
+    if (!b && !required.length) { hidden.noBrief++; continue; }
+    const brief = b ? briefAsCard(b) : null;
+    const want = brief ? fromBrief(target, brief, row, rules, { options, fields }) : {};
+    const gaps = [...new Set([...Object.keys(want).filter(k => !AUDIT_SKIP[target].has(k) && isBlank(f[k])), ...required])];
     if (!gaps.length) continue;
     const id = `${target}:${row.record_id}`;
     if (seen.has(id)) continue;
     seen.add(id);
     const card = {
       kind: "audit", target, id, rowId: row.record_id, code,
-      name: clean(f["Project"]) || brief.name, status: target === "universe" ? clean(f["Status"]) : "",
-      submittedAt: brief.submittedAt, requestNo: brief.requestNo, brief, gaps,
+      name: clean(f["Project"]) || (brief && brief.name) || "", status: target === "universe" ? clean(f["Status"]) : "",
+      submittedAt: brief ? brief.submittedAt : null, requestNo: brief ? brief.requestNo : "", brief, gaps, required,
       // The amount needs a VAT rate; the row has none, so the sheet asks for it.
-      needsVat: target === "universe" && gaps.includes("Amount (VAT-Ex.) (PHP)") && !clean(f["VAT%"]),
+      needsVat: !!brief && target === "universe" && gaps.includes("Amount (VAT-Ex.) (PHP)") && !clean(f["VAT%"]),
       notes: [], blocked: "",
     };
     card.hideKey = `${id}|${gaps.join(",")}`;
@@ -545,7 +565,7 @@ export function auditCards(target, records, briefs, rules, { hide = new Set(), o
    format: briefs go out of date). A value left blank is never written.
    `choices.vat` = the VAT rate when the row has none (then VAT% is written with the amount). */
 export function auditPatch(card, row, choices, rules, { options, fields } = {}) {
-  const want = fromBrief(card.target, card.brief, row, rules, { vat: choices.vat, options, fields });
+  const want = card.brief ? fromBrief(card.target, card.brief, row, rules, { vat: choices.vat, options, fields }) : {};
   const pick = choices.fields || card.gaps;
   const out = {};
   for (const k of pick) {
@@ -554,6 +574,11 @@ export function auditPatch(card, row, choices, rules, { options, fields } = {}) 
     if (!isBlank(v)) out[k] = typeof v === "string" ? v.replace(/\r\n?/g, "\n").trim() : v;
   }
   if (card.needsVat && "Amount (VAT-Ex.) (PHP)" in out) out["VAT%"] = choices.vat || defaultVat(card.brief.currency);
+  // A required column is always written: it can't be unticked (the sheet keeps it ticked).
+  for (const k of card.required || []) {
+    const v = choices.values && choices.values[k];
+    if (!(k in out) && !isBlank(v)) out[k] = typeof v === "string" ? v.trim() : v;
+  }
   return out;
 }
 
@@ -1044,4 +1069,97 @@ export function draftsFromJSON(data, now = Date.now()) {
     out.push([key, { at: d.at, clientToken: d.clientToken, targetId: d.targetId || null, choices: d.choices }]);
   }
   return out;
+}
+
+/* ---------------------------------------------------------------- the push queue */
+/* Pushes waiting in the queue (js/queue.js), kept in this browser (polaris.queue)
+   so a re-login, which reloads the page, doesn't lose them. Finished ones aren't
+   kept. A push that was running when the page closed may have landed: it comes
+   back as "checking", so the page looks at Lark before anything is sent again.
+   Files that hadn't uploaded can't be kept (they're in memory): the item is
+   marked lostFiles and fails with a sentence instead of running without them. */
+const QUEUE_STATES = new Set(["waiting", "running", "checking", "failed"]);
+const QUEUE_TTL_MS = 2 * 24 * 3600 * 1000;
+
+export function queueToJSON(items, now = Date.now()) {
+  let lost = false;
+  const keep = (k, v) => {
+    if (v instanceof Map || v instanceof Set) return undefined;
+    if (k === "files" && Array.isArray(v)) {
+      return v.map(f => {
+        if (!f.file_token) lost = true;
+        return f.file_token ? { name: f.name, size: f.size, file_token: f.file_token } : { name: f.name, size: f.size };
+      });
+    }
+    return v;
+  };
+  const out = [];
+  for (const it of items) {
+    if (!it || !QUEUE_STATES.has(it.state) || !it.job || !it.job.clientToken) continue;
+    lost = false;
+    const job = JSON.parse(JSON.stringify(it.job, keep));
+    out.push({
+      id: it.id, key: it.key, kind: it.kind, cardId: it.cardId, step: it.step || "", code: it.code || "", name: it.name || "",
+      verb: it.verb || "", table: it.table, rowId: it.rowId || null, fields: it.fields || {}, names: it.names || {},
+      job, state: it.state === "running" ? "checking" : it.state, error: it.error || "",
+      lostFiles: !!it.lostFiles || lost, at: it.at || now,
+    });
+  }
+  return { v: 1, items: out };
+}
+
+export function queueFromJSON(data, now = Date.now()) {
+  if (!data || data.v !== 1 || !Array.isArray(data.items)) return [];
+  return data.items.filter(it => it && typeof it.key === "string" && it.job && typeof it.job.clientToken === "string"
+                                 && it.job.choices && typeof it.job.choices === "object"
+                                 && QUEUE_STATES.has(it.state) && now - it.at <= QUEUE_TTL_MS)
+    .map(it => ({ ...it, state: it.state === "running" ? "checking" : it.state }));
+}
+
+/* ---------------------------------------------------------------- a cell as text */
+/* Any cell, in Lark's read format or as a push writes it, as the text a person
+   reads: people by name, dates as the Manila day, amounts with separators (₱ for
+   PHP columns), files by name. Lookups and formulas arrive as {type, value: [...]}
+   where `type` is the looked-up column's own type, so they're formatted by it
+   (a date lookup reads as a date, not a number). `def` is the column ({field_name,
+   type, property}); `nameOf(id)` names a person the cell only has the id of. */
+const CELL_PEOPLE = new Set([11, 1003, 1004]);
+const isRichText = (v) => Array.isArray(v) && v.length > 0
+  && v.every(x => x && typeof x === "object" && typeof x.type === "string" && typeof x.text === "string");
+
+export function cellText(def, v, { nameOf = () => "", offsetHours = 8 } = {}) {
+  if (isBlank(v)) return "";
+  const type = def ? def.type : 0, name = def ? def.field_name : "";
+  if (v && typeof v === "object" && !Array.isArray(v) && "value" in v) {      // lookup / formula
+    return cellText({ ...def, type: typeof v.type === "number" ? v.type : 0 }, Array.isArray(v.value) ? v.value : [v.value],
+                    { nameOf, offsetHours });
+  }
+  if (isRichText(v)) return plain(v);
+  if (Array.isArray(v) && (CELL_PEOPLE.has(type) || v.some(x => x && typeof x === "object" && x.id && !x.file_token))) {
+    return v.map(u => (u && (u.name || nameOf(u.id))) || "").filter(Boolean).join(", ");
+  }
+  if (type === 17 && Array.isArray(v)) {
+    const named = v.map(f => f && f.name).filter(Boolean);
+    return named.length === v.length ? named.join(", ") : `${v.length} file${v.length === 1 ? "" : "s"}`;
+  }
+  const formatter = (def && def.property && def.property.formatter) || "";
+  const one = (x) => {
+    if (x === null || x === undefined || x === "") return "";
+    if (typeof x === "boolean") return x ? "Yes" : "";
+    if (typeof x === "number") {
+      if (type === 5 || type === 1001 || type === 1002) {
+        return new Date(x + offsetHours * 3600000).toLocaleDateString("en-US", { timeZone: "UTC", month: "short", day: "numeric", year: "numeric" });
+      }
+      if (/\(PHP\)/.test(name)) return "₱" + x.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      if (formatter.includes(",") || /amount|value|price|cost|total/i.test(name)) return x.toLocaleString("en-US", { maximumFractionDigits: 2 });
+      return String(Math.round(x * 100) / 100);
+    }
+    if (typeof x === "object") {
+      if ("value" in x) return cellText(def, x, { nameOf, offsetHours });
+      if ("link" in x) return x.text || x.link;
+      return plain(x);
+    }
+    return String(x);
+  };
+  return (Array.isArray(v) ? v : [v]).map(one).filter(Boolean).join(", ");
 }

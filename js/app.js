@@ -15,6 +15,7 @@ import * as auth from "./auth.js";
 import { createInbox } from "./inbox.js";
 import { createUniverse } from "./universe.js";
 import { createCollections } from "./collections.js";
+import { createQueue } from "./queue.js";
 
 const tables = Object.fromEntries(Object.entries(TABLE_LINKS).map(([k, link]) => [k, parseBaseLink(link)]));
 const KEY = { theme: "polaris.theme", tab: "polaris.tab", draft: "polaris.draft" };
@@ -113,6 +114,10 @@ const ctx = {
   sessionEnded: (m) => auth.end(m),
   track: (work) => track(work),
   afterPush: (c, res, payload, extra) => afterPush(c, res, payload, extra),
+  afterQueue: (dests) => afterQueue(dests),
+  msLeft: () => auth.msLeft(),
+  signedIn: () => !!auth.currentToken(),
+  login: (returnTo) => login(returnTo),
   ensureTime: (ms) => ensureTime(ms),
   collectionOptions: () => ({
     "Currency": selectOptions(field("collections", "Currency")),
@@ -123,9 +128,10 @@ ctx.token = () => (auth.workToken() || {}).access_token;   // for uploads, which
 const inbox = createInbox(ctx);
 const universe = createUniverse(ctx);
 const collections = createCollections(ctx);
+const queue = ctx.queue = createQueue(ctx, inbox);   // Push hands its write to the queue
 
 /* ======================= routes ======================= */
-const ROUTES = { "": "brief", briefs: "brief", pars: "par", invoices: "invoice", andon: "andon", audit: "audit", universe: "universe", collections: "collections", settings: "settings" };
+const ROUTES = { "": "brief", briefs: "brief", pars: "par", invoices: "invoice", andon: "andon", audit: "audit", universe: "brief", collections: "invoice", settings: "settings", queue: "queue" };
 const parseRoute = () => ROUTES[(location.hash.match(/^#\/?([a-z]*)/) || [])[1] || ""] || "brief";
 
 function onRoute() {
@@ -135,11 +141,17 @@ function onRoute() {
     S.view = "login";
     S.returnTo = location.hash || "#/briefs";
   } else {
+    if (r === "queue") {
+      S.view = "queue";
+      render();
+      if (!S.data && !S.loading && !S.loadError) loadData();
+      window.scrollTo(0, 0);
+      return;
+    }
     S.view = "work";
     S.lastWork = location.hash;
-    if (r === "universe") { S.show = "universe"; if (S.tab === "invoice") { S.tab = "brief"; } }
-    else if (r === "collections") { S.show = "universe"; S.tab = "invoice"; }
-    else { S.tab = r; S.show = "inbox"; store("local", KEY.tab, r); }
+    S.tab = r;
+    store("local", KEY.tab, r);
   }
   $("#workLink").href = S.lastWork || "#/briefs";
   render();
@@ -151,8 +163,7 @@ function onRoute() {
 /* ======================= rendering ======================= */
 const TAB_TITLES = { brief: "Briefs", par: "PARs", invoice: "Invoices", andon: "ANDON", audit: "Audit" };
 function pageTitle() {
-  const name = { login: "Log in", busy: "Logging in", settings: "Settings" }[S.view]
-    || (S.show === "universe" && !isSplit() ? (S.tab === "invoice" ? "Collections" : "Universe") : TAB_TITLES[S.tab]);
+  const name = { login: "Log in", busy: "Logging in", settings: "Settings", queue: "Queue" }[S.view] || TAB_TITLES[S.tab];
   return `${name} · ${APP.name}`;
 }
 
@@ -163,17 +174,14 @@ function render() {
   $("#blockNote").hidden = !conn.blocked;
   if (S.view === "login") renderLogin();
   if (S.view === "work") {
-    $("#workspace").dataset.show = S.show;
-    // The right-hand pane follows the tab: Collections beside Invoices, the Universe otherwise.
-    const side = S.tab === "invoice" ? "collections" : "universe";
-    $("#workspace").dataset.side = side;
-    $("#sideTab").textContent = side === "collections" ? "Collections" : "Universe";
-    $("#sideTab").href = `#/${side}`;
+    // On wide screens the table sits beside the list: Collections beside Invoices, the Universe otherwise.
+    $("#workspace").dataset.side = S.tab === "invoice" ? "collections" : "universe";
     for (const t of $$(".tab")) {
-      const on = t.dataset.tab === (S.show === "universe" && !isSplit() ? "universe" : S.tab);
+      const on = t.dataset.tab === S.tab;
       if (on) t.setAttribute("aria-current", "page"); else t.removeAttribute("aria-current");
       const n = t.querySelector("[data-count]");
-      if (n) n.textContent = S.lists && S.lists[n.dataset.count] ? String(S.lists[n.dataset.count].cards.length) : "";
+      // Pushes waiting in the queue have left their list.
+      if (n) n.textContent = S.lists && S.lists[n.dataset.count] ? String(S.lists[n.dataset.count].cards.filter(c => !queue.hides(c)).length) : "";
     }
     // On a phone the tab strip scrolls: keep the open tab in view.
     const strip = $(".tabs"), open = strip.querySelector('[aria-current="page"]');
@@ -187,6 +195,7 @@ function render() {
     collections.render();
   }
   if (S.view === "settings") renderSettings();
+  queue.paint();      // the Queue tab, its peek and the queue page
 }
 
 function initials(name) {
@@ -292,6 +301,7 @@ async function loadData({ quiet = false } = {}) {
     });
     S.data = res.data;
     S.fields = res.fields;
+    S.columns = res.columns;      // what was read per table (null: every column), for the push sheet's row
     S.problems = res.problems;
     S.tableProblems = res.tableProblems;
     S.kindProblems = res.kindProblems || {};
@@ -305,6 +315,7 @@ async function loadData({ quiet = false } = {}) {
     S.loading = false;
     S.quiet = false;
     render();
+    queue.pump();     // pushes waiting for the data (after a reload or a re-login) carry on
   }
 }
 
@@ -326,7 +337,7 @@ function recompute() {
   }
   // The audit: Universe and ANDON cells left blank that the brief can fill.
   const byCode = briefsByCode(d.brief, RULES);
-  const uniAudit = auditCards("universe", d.universe, d.brief, RULES, { hide: S.auditHide, byCode });
+  const uniAudit = auditCards("universe", d.universe, d.brief, RULES, { hide: S.auditHide, byCode, fields: fieldsOf("universe") });
   const andonAudit = d.andon ? auditCards("andon", d.andon, d.brief, RULES,
     { hide: S.auditHide, byCode, options: ctx.optionsOf("andon"), fields: fieldsOf("andon") }) : { cards: [], hidden: { noBrief: 0, hidden: 0 } };
   S.lists.audit = {
@@ -351,9 +362,11 @@ async function refreshUniverse() {
 }
 
 /* ======================= after a push ======================= */
-/* Update the local copy at once (the card leaves), tell the user what Lark
-   confirmed, then re-read the Universe and highlight where the push landed. */
-async function afterPush(c, res, payload, extra = {}) {
+/* Every push runs in the queue (js/queue.js). Update the local copy at once (the
+   card leaves, dependent cards move on) and report what Lark confirmed as
+   { title, detail, warn, dest } for the queue to list. The tables are re-read once
+   the queue is empty (afterQueue), not after every push. */
+function afterPush(c, res, payload, extra = {}) {
   const d = S.data;
   if (c.kind === "audit") return afterFill(c, res);
   if (c.kind === "brief") {
@@ -384,32 +397,19 @@ async function afterPush(c, res, payload, extra = {}) {
     brief: `Pushed ${what} to the Universe.`,
     par: `Added PAR ${c.requestNo} to ${c.code}.`,
   }[c.kind];
-  const n = Object.keys(res.written).length;
   const dest = { invoice: "collections", andon: "andon" }[c.kind] || "universe";
-  const view = (dest === "universe" || dest === "collections") && !isSplit()
-    ? { action: "View", onAction: () => { location.hash = `#/${dest}`; } } : {};
   if (res.readBackError) {
-    toast(title, { type: "warn", timeout: 0, detail: `Saved, but Polaris couldn't read it back to check it (${describe(res.readBackError)}). Check it in Lark.`,
-                   link: { href: tables[dest].url, text: "Open in Lark" } });
-  } else if (res.mismatches.length) {
-    const list = res.mismatches.map(m => `${m.field}: sent "${m.want}", Lark has "${m.got}"`).join("; ");
-    toast(title, { type: "warn", timeout: 0, detail: `Check these in Lark: ${list}`,
-                   link: { href: tables[dest].url, text: "Open in Lark" } });
-  } else {
-    toast(title, { type: "success", detail: `All ${n} field${n === 1 ? "" : "s"} checked in Lark.`,
-                   ...(dest === "andon" ? { link: { href: tables[dest].url, text: `Open ${TABLE_TITLES[dest]}` } } : view) });
+    return { title, dest, warn: true, detail: `Saved, but Polaris couldn't read it back to check it (${describe(res.readBackError)}). Check it in Lark.` };
   }
-  if (dest === "collections") await collections.refresh(res.recordId);
-  if (dest === "universe") {
-    universe.highlight(res.recordId);
-    await refreshUniverse();
-    render();
+  if (res.mismatches.length) {
+    return { title, dest, warn: true, detail: `Check these in Lark: ${res.mismatches.map(m => `${m.field}: sent “${m.want}”, Lark has “${m.got}”`).join("; ")}` };
   }
+  return { title, dest, warn: false, detail: "" };
 }
 
-/* After the audit filled a row's blanks: update the local copy (the card goes),
-   say what Lark confirmed, then re-read the table so the view shows what's there. */
-async function afterFill(c, res) {
+/* After the audit filled a row's blanks (the card goes; a cell someone filled
+   meanwhile was left alone, which the report says). */
+function afterFill(c, res) {
   const t = c.target, rec = (S.data[t] || []).find(r => r.record_id === res.recordId);
   if (rec) Object.assign(rec.fields, res.written);
   recompute();
@@ -417,18 +417,21 @@ async function afterFill(c, res) {
   const n = Object.keys(res.written).length;
   const where = t === "andon" ? "ANDON" : "the Universe";
   const title = `Filled ${n} missing field${n === 1 ? "" : "s"} on ${c.code} in ${where}.`;
-  const skipped = res.skipped.length ? ` Someone had already filled ${res.skipped.join(", ")}, so those were left as they were.` : "";
+  const skipped = res.skipped.length ? `Someone had already filled ${res.skipped.join(", ")}, so ${res.skipped.length === 1 ? "it was" : "those were"} left as they were.` : "";
   if (res.readBackError || res.mismatches.length) {
-    const list = res.mismatches ? res.mismatches.map(m => `${m.field}: sent "${m.want}", Lark has "${m.got}"`).join("; ") : describe(res.readBackError);
-    toast(title, { type: "warn", timeout: 0, detail: `Check these in Lark: ${list}.${skipped}`, link: { href: tables[t].url, text: "Open in Lark" } });
-  } else {
-    toast(title, { type: "success", detail: `All ${n} checked in Lark.${skipped}` });
+    const list = res.mismatches.length ? res.mismatches.map(m => `${m.field}: sent “${m.want}”, Lark has “${m.got}”`).join("; ") : describe(res.readBackError);
+    return { title, dest: t, warn: true, detail: `Check these in Lark: ${list}. ${skipped}`.trim() };
   }
-  if (t === "universe") {
-    universe.highlight(res.recordId);
-    await refreshUniverse();
-    render();
-  }
+  return { title, dest: t, warn: false, detail: skipped };
+}
+
+/* After the queue has emptied: re-read the tables it wrote to, once, so the views
+   show what Lark really has (formulas, lookups, other people's edits). */
+async function afterQueue(dests) {
+  if (!S.data) return;
+  if (dests.has("collections")) await collections.refresh();
+  if (dests.has("universe")) await refreshUniverse();
+  render();
 }
 
 /* What a Collections push did, in a sentence. */

@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { RULES } from "../js/config.js";
-import { saveInvoiceDetails, fillGaps, createRecord, AlreadyDone } from "../js/ops.js";
+import { saveInvoiceDetails, fillGaps, createRecord, AlreadyDone, columnsToRead, schemaSpec } from "../js/ops.js";
 import { collectionRow } from "../js/sync.js";
 import { LarkError, isUncertain } from "../js/errors.js";
 
@@ -120,4 +120,22 @@ test("creates carry their client_token", async () => {
   assert.equal(rec.record_id, "rec9");
   assert.match(seen[0], /\/records\?client_token=abc-123$/);
   assert.ok(RULES.newProjectStatus);
+});
+
+test("columnsToRead: a destination table also reads its lookups and formulas; source tables don't", () => {
+  const f = (field_name, type) => ({ field_name, type });
+  const spec = schemaSpec(RULES);
+  const universe = [...spec.universe.read.filter(n => n !== RULES.universeIgnoreField).map(n => f(n, 1)),
+    f("Contract Value (USD)", 20), f("Brief Submitted", 19), f("Linked ANDON", 21), f("Created", 1001)];
+  const cols = columnsToRead("universe", universe, RULES);
+  for (const n of ["Project Code", "Contract Value (USD)", "Brief Submitted", "Linked ANDON"]) assert.ok(cols.includes(n), n);
+  assert.ok(!cols.includes("Created"));                               // Lark's own metadata isn't row data
+  assert.ok(!cols.includes(RULES.universeIgnoreField));               // not in this table: never asked for
+  // a source table reads only what its cards need
+  const brief = [...Object.keys(spec.brief.fields).map(n => f(n, 1)), f("Some Formula", 20)];
+  assert.ok(!columnsToRead("brief", brief, RULES).includes("Some Formula"));
+  // ANDON reads every column; so does any table past Lark's 50-name limit
+  assert.equal(columnsToRead("andon", [f("Project", 1)], RULES), undefined);
+  const wide = [...universe, ...Array.from({ length: 40 }, (_, i) => f(`Formula ${i}`, 20))];
+  assert.equal(columnsToRead("universe", wide, RULES), undefined);
 });

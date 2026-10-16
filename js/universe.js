@@ -132,8 +132,7 @@ export function createUniverse(ctx) {
   /* After a push: make sure the row is in view (switching the year if needed),
      scroll to it and let it glow. */
   function landHighlight() {
-    // On a phone the table may be on another tab: keep the highlight until it's shown.
-    if (!(ctx.isSplit() || $("#workspace").dataset.show === "universe")) return;
+    if (!ctx.isSplit()) return;   // the table only shows beside the list, on wide screens
     const id = U.highlight;
     const rec = S.data.universe.find(r => r.record_id === id);
     if (!rec) return;

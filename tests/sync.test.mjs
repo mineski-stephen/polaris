@@ -9,7 +9,7 @@ import {
   indexUniverse, indexCollections, briefCards, parCards, collectionCards, collectionsChange,
   universeFromBrief, verifyWritten, similarity, vatMentions,
   peoplePool, universeView, shortName, andonFromBrief, collectionsView, collectionRow, invoiceDetailsPatch,
-  auditCards, auditPatch, parseDay, fillPlan, invoiceChangedSince, draftsToJSON, draftsFromJSON,
+  auditCards, auditPatch, parseDay, fillPlan, invoiceChangedSince, draftsToJSON, draftsFromJSON, queueToJSON, queueFromJSON, cellText, isWonProject, auditMissing,
 } from "../js/sync.js";
 import { writableOnly } from "../js/ops.js";
 
@@ -526,7 +526,8 @@ test("audit: Universe blanks the brief can fill, never cells that have a value",
   const recalled = rec("recBR", { ...b.fields, "Status": "Recalled", "Submitted at": 1799000000000 });
   const rows = [
     rec("uX", { "Project Code": seg("2026TEG-P0600"), "Project": seg("Audit Fest (typed)"), "Status": "Signed CE",
-                "AM": [user("ou_other", "Someone Else")], "Year": seg("2026"), "Project Description": seg("  ") }),
+                "AM": [user("ou_other", "Someone Else")], "Year": seg("2026"), "Project Description": seg("  "),
+                "Sign Date": 1790500000000, "Month": "October" }),   // a won project that has what it needs
     rec("uY", { "Project Code": seg("2026TEG-P0601"), "Project": seg("No brief") }),
   ];
   const { cards, hidden } = auditCards("universe", rows, [older, b, recalled], RULES);
@@ -662,4 +663,110 @@ test("drafts keep their client_token across a reload, without files", () => {
   const kept = Object.keys(draftsToJSON(many, now + 100).items);
   assert.equal(kept.length, 50);
   assert.ok(kept.includes("k59") && !kept.includes("k0"));
+});
+test("queue: waiting and failed pushes survive storage; finished ones and files in memory don't", () => {
+  const now = Date.UTC(2026, 9, 16);
+  const file = { name: "INV-1.pdf", size: 1000, file: {} };            // not uploaded yet: can't be kept
+  const sent = { name: "INV-2.pdf", size: 2000, file: {}, file_token: "boxA" };
+  const items = [
+    { id: "q1", key: "audit::rec1", kind: "audit", cardId: "rec1", state: "waiting", at: now, table: "universe",
+      job: { clientToken: "t1", choices: { fields: ["Client"], names: new Map([["ou1", "Ana"]]) } } },
+    { id: "q2", key: "invoice:approved:rec2", kind: "invoice", cardId: "rec2", state: "running", at: now, table: "collections",
+      job: { clientToken: "t2", choices: { files: [file, sent] } } },
+    { id: "q3", key: "brief::rec3", kind: "brief", cardId: "rec3", state: "done", at: now, job: { clientToken: "t3", choices: {} } },
+    { id: "q4", key: "par::rec4", kind: "par", cardId: "rec4", state: "failed", error: "Nothing was written.", at: now,
+      job: { clientToken: "t4", choices: {} } },
+  ];
+  const back = queueFromJSON(JSON.parse(JSON.stringify(queueToJSON(items, now))), now + 60000);
+  assert.deepEqual(back.map(i => [i.id, i.state]), [["q1", "waiting"], ["q2", "checking"], ["q4", "failed"]]);
+  assert.equal(back[0].job.choices.names, undefined);                 // maps are rebuilt by the sheet
+  assert.equal(back[0].lostFiles, false);
+  assert.deepEqual(back[1].job.choices.files, [{ name: "INV-1.pdf", size: 1000 }, { name: "INV-2.pdf", size: 2000, file_token: "boxA" }]);
+  assert.equal(back[1].lostFiles, true);                              // INV-1 has to be added again
+  assert.equal(back[2].error, "Nothing was written.");
+});
+
+test("queue: old, broken or foreign data restores nothing", () => {
+  const now = Date.UTC(2026, 9, 16);
+  assert.deepEqual(queueFromJSON(null, now), []);
+  assert.deepEqual(queueFromJSON({ v: 2, items: [] }, now), []);
+  const old = { v: 1, items: [{ id: "q1", key: "k", state: "waiting", at: now - 3 * 24 * 3600 * 1000, job: { clientToken: "t", choices: {} } }] };
+  assert.deepEqual(queueFromJSON(old, now), []);
+  const bad = { v: 1, items: [{ id: "q1", key: "k", state: "done", at: now, job: { clientToken: "t", choices: {} } }, { id: "q2" }] };
+  assert.deepEqual(queueFromJSON(bad, now), []);
+});
+
+test("cellText: lookups and formulas read by their inner type, like the cells they look up", () => {
+  const col = (field_name, type, property) => ({ field_name, type, property });
+  const oct14 = Date.UTC(2026, 9, 13, 16);                                   // midnight Oct 14 in Manila
+  // formula numbers (with float noise), amounts and PHP columns
+  assert.equal(cellText(col("Amount (VAT-Inc.)", 20), { type: 2, value: [1120000.0000001] }), "1,120,000");
+  assert.equal(cellText(col("Contract Value (USD)", 20), { type: 2, value: [9824.56] }), "9,824.56");
+  assert.equal(cellText(col("Amount (VAT-Ex.) (PHP)", 2), 535714.29), "₱535,714.29");
+  assert.equal(cellText(col("Days open", 20), { type: 2, value: [12] }), "12");
+  // a lookup of a date, a select, people, text, a URL, a checkbox
+  assert.equal(cellText(col("Brief Submitted", 19), { type: 5, value: [oct14] }), "Oct 14, 2026");
+  assert.equal(cellText(col("Business Unit", 19), { type: 3, value: ["PDEI - Event Service"] }), "PDEI - Event Service");
+  assert.equal(cellText(col("AM", 19), { type: 11, value: [{ id: "ou_1", name: "Ana Reyes" }, { id: "ou_2" }] },
+    { nameOf: (id) => (id === "ou_2" ? "Ben Cruz" : "") }), "Ana Reyes, Ben Cruz");
+  assert.equal(cellText(col("Brief Status", 19), { type: 1, value: [{ type: "text", text: "Appro" }, { type: "text", text: "ved" }] }), "Approved");
+  assert.equal(cellText(col("Brief", 19), { type: 15, value: [{ link: "https://x.example/1", text: "202605260047" }] }), "202605260047");
+  assert.equal(cellText(col("Won?", 19), { type: 7, value: [true] }), "Yes");
+  // a link field, and a lookup of a lookup
+  assert.equal(cellText(col("Project", 18), [{ record_ids: ["rec1"], table_id: "tbl1", text: "Alpha Fest", type: "text" }]), "Alpha Fest");
+  assert.equal(cellText(col("Client", 19), { type: 19, value: [{ type: 1, value: [{ type: "text", text: "Acme" }] }] }), "Acme");
+  // ordinary cells, and blanks stay blank
+  assert.equal(cellText(col("Event Start", 5), oct14), "Oct 14, 2026");
+  assert.equal(cellText(col("Invoice Request", 2), 202609090084), "202609090084");
+  assert.equal(cellText(col("Invoice", 17), [{ file_token: "a", name: "INV-1.pdf" }, { file_token: "b" }]), "2 files");
+  assert.equal(cellText(col("Tools", 4), ["Sound System", "LED Wall"]), "Sound System, LED Wall");
+  assert.equal(cellText(col("Brief Status", 19), { type: 1, value: [] }), "");
+  assert.equal(cellText(col("PAR", 1), null), "");
+  assert.equal(cellText(col("Amount", 2), 0), "0");
+});
+
+test("audit: a won project must have Sign Date and Month; the Fill is refused while either is blank", () => {
+  const cols = ["Project Code", "Project", "Status", "Mancom Phase", "Sign Date", "Month"].map(field_name => ({ field_name, type: 1 }));
+  const b = rec("recBW", {
+    "Request No.": url("202602010001"), "Project Code": seg("2026TEG-P0700"), "Project Name": seg("Won Fest"),
+    "Initiator department": seg("Sales"), "Status": "Approved", "Submitted at": 1790000000000,
+    "Contract Value": 1120000, "Contract Value-Currency": "PHP", "Remarks": seg("Two-day event."),
+  });
+  const rows = [
+    rec("w1", { "Project Code": seg("2026TEG-P0700"), "Project": seg("Won Fest"), "Status": "For Collection", "Project Description": seg("x") }),
+    rec("w2", { "Project Code": seg("2026TEG-P0701"), "Project": seg("No brief, won"), "Status": "For Pitching", "Mancom Phase": "7. Won",
+                "Sign Date": 1790500000000 }),
+    rec("w3", { "Project Code": seg("2026TEG-P0702"), "Project": seg("Not won"), "Status": "For Pitching" }),
+    rec("w4", { "Project Code": seg("2026TEG-P0703"), "Project": seg("Closed, complete"), "Status": "Fully Closed",
+                "Sign Date": 1790500000000, "Month": "October" }),
+  ];
+  // the rule: by Status (each listed one) or by Mancom Phase
+  for (const status of RULES.auditRequired.statuses) assert.ok(isWonProject({ "Status": status }, RULES), status);
+  assert.ok(isWonProject({ "Status": "For Pitching", "Mancom Phase": "7. Won" }, RULES));
+  assert.ok(!isWonProject({ "Status": "For Pitching", "Mancom Phase": "2. Pitch Review" }, RULES));
+
+  const { cards } = auditCards("universe", rows, [b], RULES, { fields: cols });
+  const by = Object.fromEntries(cards.map(c => [c.rowId, c]));
+  assert.deepEqual(by.w1.required, ["Sign Date", "Month"]);
+  assert.ok(by.w1.gaps.includes("Sign Date") && by.w1.gaps.includes("Month"));
+  assert.deepEqual(by.w2.required, ["Month"]);                    // no brief, still asked: only what's blank
+  assert.equal(by.w2.brief, null);
+  assert.equal(by.w3, undefined);                                  // not won, no brief: nothing to do
+  assert.equal(by.w4, undefined);                                  // won and complete
+  // a Universe without the column: not asked for (the column check reports it instead)
+  const noMonth = auditCards("universe", rows, [b], RULES, { fields: cols.filter(c => c.field_name !== "Month") }).cards;
+  assert.deepEqual(noMonth.find(c => c.rowId === "w2"), undefined);
+
+  // the Fill: refused while a required column is blank, whatever else is ticked
+  const sign = 1791000000000;
+  const half = auditPatch(by.w1, rows[0], { fields: by.w1.gaps, values: { "Sign Date": sign } }, RULES);
+  assert.deepEqual(auditMissing(by.w1, half), ["Month"]);
+  const none = auditPatch(by.w1, rows[0], { fields: [] }, RULES);          // unticking can't drop them
+  assert.deepEqual(auditMissing(by.w1, none), ["Sign Date", "Month"]);
+  const full = auditPatch(by.w1, rows[0], { fields: by.w1.gaps, values: { "Sign Date": sign, "Month": " October " } }, RULES);
+  assert.deepEqual(auditMissing(by.w1, full), []);
+  assert.equal(full["Sign Date"], sign);
+  assert.equal(full["Month"], "October");
+  const onlyMonth = auditPatch(by.w2, rows[1], { fields: ["Month"], values: { "Month": "November" } }, RULES);
+  assert.deepEqual(onlyMonth, { "Month": "November" });             // nothing from a brief it doesn't have
 });

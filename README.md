@@ -24,6 +24,7 @@ phone and on a PC, and every change is made as you, with your own Lark login.
 ## Contents
 
 - [Using Polaris](#using-polaris)
+- [The push queue](#the-push-queue)
 - [What shows up as a card](#what-shows-up-as-a-card)
 - [What gets written](#what-gets-written)
 - [The audit](#the-audit)
@@ -55,22 +56,60 @@ phone and on a PC, and every change is made as you, with your own Lark login.
 2. **Briefs / PARs** tabs list what isn't in the Universe yet; **Invoices** lists
    every change Collections needs (see [Invoices](#invoices-the-collections-lifecycle)).
    Newest first; search narrows the list.
-3. **Push** opens a sheet that shows exactly what will be written:
+3. **Push** opens the sheet. On the left, what needs a person; on the right, the
+   Lark row the push changes, as it will be: the cells it changes are highlighted
+   (the old value struck through), and it follows what you pick on the left. Lookups
+   and formulas show what Lark has (a new row has none until Lark fills them). A new
+   row says *New row*. Where there isn't room for both side by side, the row sits
+   under the fields. Clicking outside the sheet is the same as **Cancel** (what you
+   typed is kept for next time).
    - *Brief:* type the **Client**, pick the **BD** (blank unless you pick someone;
-     frequent BDs are listed first), choose **VAT** (the amount updates as you
-     switch), and optionally **Add other links** (blank by default).
-   - *PAR:* shows the PAR cell before and after. If several Universe rows share
-     the code, you choose the row.
-   - *Invoice:* shows which Collections row changes and how, each cell with what
-     it was before. Pick another row (or a new one) if Polaris guessed wrong; a new
-     row's **AR Name** can be edited (for example add "Downpayment"). For an
+     frequent BDs are listed first), choose **VAT**, and optionally **Add other links**.
+   - *PAR:* if several Universe rows share the code, you choose the row.
+   - *Invoice:* pick another Collections row (or a new one) if Polaris guessed wrong;
+     a new row's **AR Name** can be edited (for example add "Downpayment"). For an
      approved request you can add the invoice details (number, SI, date, file).
+   - *Audit (Fill):* each blank the brief can fill, ticked and pre-filled; edit or untick.
+   The sheet's button (**Push to Universe**, **Fill 2 fields**, …) closes it at once:
+   the card leaves the list, the next card's button has the keyboard, and the push
+   goes to the **[queue](#the-push-queue)**.
 4. **Ignore** hides a card by ticking the source row's IGNORE box. **Undo** in the
    message brings it back.
-5. On a wide screen the **Universe** table sits beside the cards, so you can watch
-   a pushed brief land (it glows briefly). On a phone, open the **Universe** tab
-   or tap **View** in the message after a push.
-6. **Settings** (the gear next to **Data Audit** in the top bar): see [Settings](#settings).
+5. On a wide screen (1280 px and up) the **Universe** table sits beside the cards
+   (**Collections** beside Invoices). Narrower screens show the cards only.
+6. **Settings** (the gear next to **Queue** in the top bar): see [Settings](#settings).
+
+---
+
+## The push queue
+
+Pushes wait in the **Queue** while Lark confirms them, so a long list (the audit can
+have hundreds of cards) can be reviewed without stopping.
+
+- **Queue** in the top bar shows how many are waiting, and a red number for any that
+  failed. Hovering it shows the next five (the one being sent has a spinner and its
+  upload progress; each ticks green and slides out when it lands). Click it for the
+  queue page: **Failed**, **Waiting** and **Finished**, as cards like the inbox's.
+- Pushes are sent **one at a time, in the order you pressed them**, each exactly as
+  before: the destination is re-read first, the write is read back, and the result
+  says what Lark confirmed. A PAR or invoice that waits for its brief unlocks once
+  the brief's push lands.
+- **A push Lark refused** stays under **Failed** with the reason (*Nothing was
+  written. …*). **Retry** sends it again, **Edit** reopens its sheet with what you
+  chose, **Remove** puts the card back in its list. One message on screen says how
+  many need a look, with **Open queue**.
+- **A push whose answer never came back** (a timeout or a dropped connection) may
+  have landed, so the queue never sends it again on its own: it re-reads Lark, then
+  marks it done (*It's in Lark.*) or failed (*It didn't reach Lark. It's safe to retry.*).
+- **Waiting pushes are kept in this browser** (`polaris.queue`, up to 2 days), so
+  **Log in again** (which reloads the page) or an accidental reload doesn't lose
+  them: they carry on once the tables have loaded. A push that was being sent when
+  the page closed is checked against Lark first. Files that hadn't uploaded can't be
+  kept: that push fails with a note to add the file again (**Edit**).
+- **When the login runs low** (under a minute), the queue stops and says so, with
+  **Log in again**. **Pause** / **Resume** on the queue page stop and restart it by hand.
+- Closing the tab while pushes are waiting asks first.
+- The tables are re-read once when the queue is empty, not after every push.
 
 ---
 
@@ -228,11 +267,20 @@ Project Description, start and end dates, RFP Received Date and Year for the
 Universe; the typed ANDON columns (AM, MKT (PITCH), Business Unit, Tools, Event
 Start / End…) for ANDON.
 
+**Won projects must have a Sign Date and a Month.** A Universe project whose Status
+is *Fully Closed*, *For Closing*, *For Collection*, *Signed CE* or *Won - Awaiting CE
+Signature*, or whose Mancom Phase is *7. Won*, gets a card when either is blank,
+even without a brief (no brief has them, so you type them in). They can't be
+unticked, and the Fill is refused while either is still blank (*A won project needs
+Sign Date and Month.*). The statuses, phases and columns are `auditRequired` in
+[`js/config.js`](js/config.js); if the Universe has no column by that name, audit
+pushes to the Universe stop and the column check says which one is missing.
+
 - **Fill** shows each blank with an editor, pre-filled from the brief. Briefs go
   out of date, so change anything before pushing (text, amounts, dates, people,
-  Business Unit, Tools); untick any you'd rather leave blank. The sheet says which
-  values are from the brief and which you edited. If the amount is blank and the
-  row has no VAT%, pick the VAT (it's written to VAT% too).
+  Business Unit, Tools); untick any you'd rather leave blank (except a won
+  project's Sign Date and Month). If the amount is blank and the row has no VAT%,
+  pick the VAT (it's written to VAT% too).
 - Only blank cells are ever written. The row is re-read just before writing: a
   cell someone filled meanwhile is left alone, then everything written is read back.
 - Never audited: what a person decides (Client, BD, Other Links, Status, Mancom
@@ -250,15 +298,16 @@ years*), **Lost, Stalled and Archived hidden**, sorted by **RFP Received Date**
 (newest first; click the column to flip it). Columns: Client, Project, Amount
 (VAT-Ex.) (PHP), BD, AM, Project Code, RFP Received Date. Groups can be folded.
 
-After a push, Polaris re-reads the Universe from Lark (not just its own copy), so
-the row you see is the row that's really there.
+Shown beside the cards on wide screens only. When the queue empties, Polaris
+re-reads the Universe from Lark (not just its own copy), so the rows you see are
+what's really there.
 
 ---
 
 ## The Collections view
 
 On the **Invoices** tab, the right-hand pane shows **Collections** instead of the
-Universe (on a phone, the last tab becomes *Collections*). Columns: AR Name,
+Universe (wide screens only). Columns: AR Name,
 Project Code, Invoice Amount, Currency, Sales Remarks, Status, AM; grouped by
 **Status** (in the column's own order) and sorted by **Invoice Number** (newest
 first; click *Invoice No.* to flip). The invoice number, SI number, date and file
@@ -302,6 +351,7 @@ What Polaris keeps in this browser (every key starts with `polaris.`, all values
 | `theme`, `tab` | this browser | the theme choice, the open tab |
 | `settings` | this browser | `{ "larkUrl": … }`, the saved connection service address (used on a local page only) |
 | `draft` | this browser | what you typed in a push sheet you cancelled, with its retry token, for up to 7 days. Files aren't kept. |
+| `queue` | this browser | pushes waiting in the queue (or that didn't go through): what each writes, with its retry token, for up to 2 days. Finished pushes and files that hadn't uploaded aren't kept. Not cleared by **Clear local data**: use **Remove** on the queue page. |
 | `auditHidden`, `uniSort`, `uniCollapsed`, `colSort`, `colCollapsed` | this browser | hidden audit cards, sort order, folded groups |
 | `auth.token`, `auth.pending`, `auth.user` | this tab | your login, a login in progress, your name and picture. Gone when the tab closes. |
 | `override.lark` | this tab | the `?lark=` link override |
@@ -352,6 +402,8 @@ Node tools (with the app's token, straight to Lark), because both hand it a `cal
   only fills cells that are still blank (a VAT% someone set meanwhile counts too).
 - **Creates are idempotent** (`client_token`), and the token is kept with the draft,
   so a retry (even after a reload) can't make a second row.
+- **Pushes are queued, not hurried.** The queue sends one at a time, in order, with the
+  same checks as before, and never sends a push twice on its own (see [The push queue](#the-push-queue)).
 - **Writes are never retried automatically.** A write that Lark answers with an error
   says *Nothing was written.* A write that timed out (after 2 minutes) or lost the
   connection after it was sent may have landed: Polaris says *couldn't confirm the
@@ -490,8 +542,9 @@ the live tables.
   (and local addresses for testing), and a `referrer` meta keeps addresses private.
 - **Overrides work only on a local page**, accept only `https` (or local `http`) addresses, and always show a red badge.
 - **What stays in this browser:** your theme and tab, hidden audit cards and view choices, the connection
-  service address you saved for testing, and unsent drafts (typed text and a retry token, for up to 7 days).
-  Business data from Lark isn't kept. **Clear local data** in Settings removes the drafts and view choices.
+  service address you saved for testing, unsent drafts (typed text and a retry token, for up to 7 days), and
+  pushes waiting in the queue (what each will write, for up to 2 days, so a re-login doesn't lose them).
+  Otherwise business data from Lark isn't kept: on a shared computer, empty the queue before you leave. **Clear local data** in Settings removes the drafts and view choices.
 - The preview snapshot and `.env` are git-ignored. `npm run check:shell` fails if a key, an app secret or a token
   turns up in any file that would be published.
 
@@ -514,6 +567,9 @@ the live tables.
 - **Lark API formats.** Read-backs use `records/batch_get` (the single-record GET
   returns numbers as text). Text columns only accept plain text; Lark still shows
   URLs in them as clickable links.
+- **Narrow screens show the cards only.** Below 1280 px there's no Universe or
+  Collections table, so a Collections row's invoice details (number, SI, date, file)
+  can be added only from the push sheet of an approved request, or on a wider screen.
 - **Files in a draft.** If you cancel (or reload) an invoice sheet, the text you typed comes
   back, but the files you picked don't: add them again.
 - **One login lasts about 2 hours.** Lark gives no refresh token, so after that you log in again.
@@ -536,7 +592,13 @@ the live tables.
 | *Your login ends at 4:30 PM.* (stays on screen) | Log in again to keep working without a break. |
 | *Your login is about to end, so this wasn't sent.* | Log in again, then try it again. |
 | *Polaris couldn't confirm the save. Refresh before trying again.* | The answer never came back, so the push may have gone through. Polaris looks at Lark again: if it's there you get *It's in Lark.*; if not, push again (the retry can't add a second row). |
-| *Nothing was written. …* | Lark answered with an error, and the rest of the message says why. Fix that and push again. |
+| *Nothing was written. …* | Lark answered with an error, and the rest of the message says why. Fix that and push again (in the queue: **Retry**, or **Edit** to change it). |
+| *N pushes didn't go through.* (stays on screen, **Open queue**) | Open the queue; each one says why. **Retry**, **Edit** or **Remove** it. |
+| *Your login is about to end, so the queue stopped.* | **Log in again**. The waiting pushes are kept in this browser and carry on once the tables load. |
+| *Its file was lost when the page reloaded.* (queue) | The page reloaded before that file uploaded. **Edit** the push, add the file again, and push. |
+| *Not sent: it's no longer in its list.* (queue, *Check in Lark*) | The card left its list before its turn (someone did it in Lark, or it was ignored). Nothing was written. |
+| *Polaris couldn't confirm it. Check it in Lark before retrying.* (queue) | The answer never came back and Lark couldn't be re-read. Look at the row in Lark; **Retry** only if it isn't there. |
+| A card you pushed isn't in the list | It's in the queue (hover **Queue**). **Remove** there brings it back. |
 | *These columns don't match what Polaris expects…* | A column was renamed or changed type (common when switching to production). Fix the table, or run `npm run setup` for a missing column or option. |
 | *Your login can only read the tables.* | Log in again so Lark grants editing. |
 | *Lark says your account can't open or edit this Base.* | Ask the Base owner for edit access. |
@@ -547,6 +609,7 @@ the live tables.
 | *Push this project's brief first.* | Use **Go to the brief**, push it, then the PAR or invoice can go. |
 | *Add this project's PAR to the Universe first.* | Use **Go to the PAR** (if it's listed), push it, then the invoice can go. |
 | *"…" changed since the list was loaded.* | Someone updated that Collections row meanwhile. Nothing was written; the list refreshed, so check the card again. The same message appears for invoice details: the cells you changed were changed in Lark first. |
+| *A won project needs Sign Date and Month.* (Fill) | Type the missing one(s) in; the Fill stays off until both have a value. |
 | *Someone had already filled …, so those were left as they were.* (after Fill) | The audit only fills blank cells; those weren't blank any more. |
 | Red **Overridden** badge in the top bar | This browser is using another connection service address (Settings > Advanced, or a `?lark=` link). Clear it there, or open the page with `?reset`. |
 | Red *Preview mode* badge | `?preview` is on: the data is a snapshot and nothing is sent to Lark. Open Polaris without `?preview`. |
@@ -595,7 +658,7 @@ design language first, copy them over unedited, then `npm run check:shell` confi
 | ---- | ------- |
 | `index.html` | The page: the one-time storage move, security metas, the loader and import map, every view, the boot watchdog. |
 | `css/theme.css`, `css/mineski-base.css` | Polaris's colors (light and dark) and the shared Mineski stylesheet: unedited copies of `design-ref/mineski-design-language/assets/themes/polaris.css` and `assets/mineski-base.css`. |
-| `css/app.css` | Only what is Polaris's own: the workspace, the tables' columns and phone layout, the flow line, the audit and the date field. |
+| `css/app.css` | Only what is Polaris's own: the workspace, the tables' columns, the flow line, the audit, the push sheet and its row, the queue, and the date field. |
 | `img/` | The Polaris icon (SVG, plus PNGs for the favicon, phones and the home screen). |
 | `manifest.webmanifest` | Lets phones add Polaris to the home screen. |
 | `js/config.js` | Everything a maintainer changes: `APP` (name, `env`), `SERVICES`, `LARK` (app id, scopes, API), `TABLES` (live and test links), business rules, the Universe view. |
@@ -606,8 +669,10 @@ design language first, copy them over unedited, then `npm run check:shell` confi
 | `js/service.js` | Which addresses may override the connection service, and whether its `GET /` answer means awake and recent enough. Pure. |
 | `js/settings.js` | The saved connection service address and `?lark=` / `?reset` link overrides (local pages only). |
 | `js/auth.js` | Lark login (OAuth + PKCE), the session, and how a session ends. |
-| `js/app.js` | Routes, header, loading, Settings, the session clock, and what happens after a push. |
-| `js/inbox.js` | The cards, the push sheet (with the BD picker) and Ignore / Undo. |
+| `js/app.js` | Routes, header, loading, Settings, the session clock, and what happens after a push (quietly, for the queue). |
+| `js/inbox.js` | The cards, the push sheet (with the BD picker), Ignore / Undo, and the push itself (`perform`) that the queue runs. |
+| `js/queue.js` | The push queue: runs pushes one at a time, re-checks uncertain ones, keeps waiting ones in this browser; the Queue tab, its hover list and the queue page. |
+| `js/rowdoc.js` | The row beside the push sheet: the Lark row as the push will leave it, changes highlighted. |
 | `js/universe.js` | The Universe table. |
 | `js/collections.js` | The Collections table and its invoice details sheet. |
 | `js/icons.js`, `js/ui.js` | The shared Mineski icons and UI helpers: unedited copies of `design-ref/mineski-design-language/assets/`. Change them there, then copy them over. |

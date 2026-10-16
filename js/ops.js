@@ -42,8 +42,9 @@ const TYPE_NAMES = { 1: "Text", 2: "Number", 3: "Single select", 4: "Multi selec
                      7: "Checkbox", 11: "Person", 15: "URL", 17: "Attachment", 18: "Link",
                      19: "Lookup", 20: "Formula" };
 
-/* Every field the page reads or writes, with its required type. Reads only fetch
-   these columns. `options` lists select values the page writes, which must exist. */
+/* Every field the page reads or writes, with its required type. Reads fetch these
+   columns (plus, for the tables pushes write to, their lookups and formulas: see
+   columnsToRead). `options` lists select values the page writes, which must exist. */
 export function schemaSpec(rules) {
   return {
     universe: {
@@ -52,7 +53,11 @@ export function schemaSpec(rules) {
       read: ["Project Code", "Project", "Client", "PAR", "Amount (VAT-Ex.) (PHP)", "BD", "AM",
              "RFP Received Date", "Status", "Year", "Amount (VAT-Inc.)", "Business Unit", rules.universeIgnoreField,
              // …and what the audit compares with the brief
-             "MKT", "VAT%", "Project Description", "Project Start", "Project End"],
+             "MKT", "VAT%", "Project Description", "Project Start", "Project End",
+             // …and the rest a push writes, so the push sheet can show the whole row
+             "Mancom Phase", "Other Links",
+             // …and what a won project must have (the audit asks for these)
+             ...rules.auditRequired.fields],
       index: ["Project Code", "Project", "Client", "PAR"],
       fields: {
         "Client": T.text, "Project": T.text, "Project Code": T.text, "PAR": T.text,
@@ -71,7 +76,9 @@ export function schemaSpec(rules) {
       },
       // Read-only columns (formulas, lookups) that only the Invoices list needs:
       // if one is missing, only invoice pushes stop.
-      neededBy: { invoice: ["Amount (VAT-Inc.)", "Business Unit"] },
+      neededBy: { invoice: ["Amount (VAT-Inc.)", "Business Unit"],
+                  // the audit can't ask for a column the Universe doesn't have
+                  "audit:universe": rules.auditRequired.fields },
     },
     collections: {
       read: ["Project Code", "Invoice Request", "AR Name", "Invoice Amount", "Currency", "Sales Remarks", "Status",
@@ -125,6 +132,25 @@ export function schemaSpec(rules) {
       optional: { "Associated Project Approval": T.text, "Completed at": T.date },
     },
   };
+}
+
+/* Lookups, formulas and links: read-only, but part of the row a person compares
+   against in the push sheet (js/rowdoc.js), so a destination table reads them too. */
+const SHOWN_COMPUTED = new Set([18, 19, 20, 21]);
+const MAX_FIELD_NAMES = 50;   // Lark's limit on a records/search field list
+
+/* The columns to read for a table, from its live field list: the spec's (only
+   those the table has: Lark refuses a list naming a missing one) and, for the
+   tables pushes write to, every lookup and formula. Past Lark's 50-name limit, or
+   for read "*": undefined, meaning every column. */
+export function columnsToRead(key, fields, rules) {
+  const t = schemaSpec(rules)[key];
+  if (!t || t.read === "*") return undefined;
+  const present = new Set(fields.map(f => f.field_name));
+  const base = t.read || [...Object.keys(t.fields), ...Object.keys(t.optional || {})];
+  const computed = t.read ? fields.filter(f => SHOWN_COMPUTED.has(f.type)).map(f => f.field_name) : [];
+  const names = [...new Set([...base, ...computed])].filter(n => present.has(n));
+  return names.length > MAX_FIELD_NAMES ? undefined : names;
 }
 
 const tableUrl = (t) => `${OPEN_API}/bitable/v1/apps/${encodeURIComponent(t.app)}/tables/${encodeURIComponent(t.table)}`;
@@ -210,24 +236,21 @@ export const selectOptions = (field) => ((field && field.property && field.prope
 export async function loadEverything(call, tables, rules, onProgress) {
   const spec = schemaSpec(rules);
   const keys = Object.keys(spec);
-  const fields = {}, data = {}, tableProblems = {}, kindProblems = {};
+  const fields = {}, data = {}, columns = {}, tableProblems = {}, kindProblems = {};
   await Promise.all(keys.filter(k => tables[k]).map(async (k) => {
     fields[k] = await loadFields(call, tables[k]);
     tableProblems[k] = checkSchema(k, fields[k], spec[k]);
     for (const [kind, list] of Object.entries(checkNeeded(k, fields[k], spec[k]))) {
       kindProblems[kind] = [...(kindProblems[kind] || []), ...list];
     }
-    const present = new Set(fields[k].map(f => f.field_name));
-    // read "*": every column (no field list; Lark caps that list at 50 names).
-    const want = spec[k].read === "*" ? undefined
-      : [...new Set(spec[k].read || [...Object.keys(spec[k].fields), ...Object.keys(spec[k].optional || {})])]
-        .filter(n => present.has(n));
+    const want = columnsToRead(k, fields[k], rules);
+    columns[k] = want || null;      // null: every column
     data[k] = await loadRecords(call, tables[k], want, (n, total) => onProgress && onProgress(k, n, total));
   }));
   // `problems`: every table; `tableProblems`: by table, so a broken ANDON only stops ANDON
   // pushes; `kindProblems`: columns only one kind of push needs.
   return { fields, problems: [...Object.values(tableProblems).flat(), ...Object.values(kindProblems).flat()],
-           tableProblems, kindProblems, data };
+           tableProblems, kindProblems, data, columns };
 }
 
 /* ======================= writes ======================= */
@@ -281,9 +304,7 @@ const universeIndex = async (call, tables, rules) =>
 
 /* The Universe again, fresh from Lark, with every column the page shows. */
 export async function loadUniverse(call, tables, rules) {
-  // Only columns the table has: Lark refuses a field list naming a missing one (e.g. the optional IGNORE).
-  const present = new Set((await loadFields(call, tables.universe)).map(f => f.field_name));
-  return loadRecords(call, tables.universe, schemaSpec(rules).universe.read.filter(n => present.has(n)));
+  return loadRecords(call, tables.universe, columnsToRead("universe", await loadFields(call, tables.universe), rules));
 }
 
 /* After a write has succeeded: read the record back and compare. A failed read
@@ -372,7 +393,7 @@ export async function pushCollections(call, tables, rules, card, change, clientT
 
 /* The Collections table again, fresh from Lark. */
 export async function loadCollections(call, tables, rules) {
-  return loadRecords(call, tables.collections, schemaSpec(rules).collections.read);
+  return loadRecords(call, tables.collections, columnsToRead("collections", await loadFields(call, tables.collections), rules));
 }
 
 /* Invoice details typed in by finance (Invoice Number, SI Number, Invoice Date, the

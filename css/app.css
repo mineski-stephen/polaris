@@ -40,7 +40,6 @@ main { padding-bottom: 120px; }
 .flow-row { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
 .flow-step { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 8px; }
 .flow-step .flow-arrow { margin: 0; }   /* the step's gap already spaces it */
-.flow-sheet { padding: 9px 12px; border-radius: var(--r-sm); background: var(--surface-2); border: 1px solid var(--line); }
 /* Ignore sits in a wrapper (so its tooltip shows while it's disabled): size it like a button. */
 .btn-wrap { display: flex; }
 .btn-wrap .btn { flex: 1 1 auto; }
@@ -51,14 +50,9 @@ main { padding-bottom: 120px; }
 .sub-line .part { white-space: nowrap; }
 
 /* ---- sheet extras (push confirmation, invoice details) ------------------------ */
-.vat { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.amount { display: flex; flex-direction: column; }
-.amount b { font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
-.amount span { font-size: 12.5px; color: var(--muted); }
 .note { font-size: 13px; padding: 8px 10px; border-radius: var(--r-sm); background: var(--warn-soft); color: var(--warn); }
 .field > .linkish { align-self: flex-start; font-size: 14px; }
 .linkish .i { width: 16px; height: 16px; }
-.written dd.is-long { max-height: 6.2em; overflow: auto; }
 .files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .files li { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; border: 1px solid var(--line); border-radius: var(--r-sm);
             font-size: 13.5px; background: var(--surface-2); }
@@ -127,6 +121,104 @@ main { padding-bottom: 120px; }
 .date-pick { position: absolute; left: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; border: 0; padding: 0; }
 .date-field.is-bad input[type="text"] { border-color: var(--danger); box-shadow: 0 0 0 3px var(--danger-soft); }
 
+/* ---- the push queue: the Queue tab and its peek ------------------------------ */
+.queue-wrap { position: relative; display: flex; }
+.queue-wrap:has(#queueLink[hidden]) { display: none; }
+.count.count-bad { background: var(--danger-solid); color: var(--on-brand); margin-left: 2px; }
+/* The next five pushes, on hover or keyboard focus. Not on touch screens: a tap opens the queue. */
+.queue-peek {
+  position: absolute; top: calc(100% + 10px); right: -6px; z-index: 40; width: 320px;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-lg);
+  background: var(--surface); box-shadow: var(--shadow-md);
+  opacity: 0; visibility: hidden; transform: translateY(-4px); pointer-events: none;
+  transition: opacity .16s var(--ease), transform .16s var(--ease), visibility 0s linear .16s;
+}
+.queue-peek::before { content: ""; position: absolute; left: 0; right: 0; top: -12px; height: 12px; }   /* hover bridge */
+.queue-wrap:hover .queue-peek, .queue-wrap:focus-within .queue-peek {
+  opacity: 1; visibility: visible; transform: none; pointer-events: auto;
+  transition: opacity .16s var(--ease) .1s, transform .16s var(--ease) .1s, visibility 0s linear .1s;
+}
+.queue-peek.is-empty { display: none; }
+@media (hover: none) { .queue-peek { display: none; } }
+.q-head { display: flex; align-items: center; gap: 6px; font-size: 13px; margin-bottom: 6px; }
+.q-head b { margin-right: auto; }
+.q-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.q-row { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 8px;
+         padding: 7px 2px; border-top: 1px solid var(--line); font-size: 12.5px; overflow: hidden; }
+.q-row .i, .q-row .spinner { width: 15px; height: 15px; }
+.q-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.3; }
+.q-text b { font-weight: 700; }
+.q-text span, .q-state { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.q-state { font-size: 12px; font-variant-numeric: tabular-nums; }
+.q-slot { width: 8px; height: 8px; margin: 0 auto; border-radius: 50%; background: var(--line-2); }
+.q-row.is-done .i { color: var(--ok); }
+.q-row.is-done.is-warn .i { color: var(--warn); }
+.q-row.is-failed .i { color: var(--danger); }
+.q-row.is-leaving { background: var(--ok-soft); border-radius: var(--r-sm); }
+.q-foot { padding-top: 8px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--muted); }
+
+/* ---- the Queue page (#/queue): the inbox's column and cards ---------------------- */
+.view-queue { max-width: 760px; margin: 0 auto; }
+.queue-page { display: grid; gap: 22px; }
+.queue-page .subhead { margin-bottom: 10px; }
+.q-item .badge .spinner { width: 11px; height: 11px; }
+.q-msg { font-size: 13px; color: var(--muted); }
+.q-msg.is-err { color: var(--danger); }
+.q-msg.is-warn { color: var(--warn); }
+/* Compact: the actions sit beside the title, so a long queue stays scannable. */
+@media (min-width: 560px) {
+  .q-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 16px; }
+  .q-item > .item-head, .q-item > .q-msg { grid-column: 1 / -1; }
+  .q-item > h3, .q-item > .item-meta { grid-column: 1; }
+  .q-item > .item-actions { grid-column: 2; grid-row: 2 / span 2; align-self: center; margin-top: 0; }
+}
+.q-item > .q-msg { margin-top: 8px; }
+#queueTools { display: flex; gap: 8px; flex-wrap: wrap; }
+#queuePaused { margin-bottom: 14px; }
+
+/* ---- the push sheet: the form, and the Lark row beside it (js/rowdoc.js) ---------- */
+.modal.pair { width: min(1120px, calc(100% - 32px)); background: none; border: 0; box-shadow: none; overflow: visible; }
+/* each card as tall as its own content (up to the screen), tops aligned */
+.modal.pair[open] { display: grid; grid-template-columns: minmax(0, 500px) minmax(0, 1fr); gap: 16px; align-items: start; }
+.pair-form, .pair-doc { min-width: 0; max-height: calc(100dvh - 48px); background: var(--surface); color: var(--ink);
+                        border: 1px solid var(--line); border-radius: var(--r-xl); box-shadow: var(--shadow-lg); }
+.pair-form { overflow: hidden; }
+/* the row scrolls under its fixed header, the scrollbar inset from the rounded corners */
+.pair-doc { overflow: hidden; display: flex; flex-direction: column; }
+.doc-body { min-height: 0; overflow: auto; padding: 16px 18px 18px 24px; margin: 0 6px 6px 0; }
+/* the row, as a filled-in form: label over value, two columns, long text across */
+.doc-head { flex: none; padding: 24px 24px 14px; border-bottom: 1px solid var(--line); }
+.doc-kicker { font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: var(--brand-text); }
+.doc-head h3 { margin-top: 4px; font-size: 20px; font-weight: 800; letter-spacing: -.02em; overflow-wrap: anywhere; }
+.doc-meta { margin-top: 2px; font-size: 14px; color: var(--muted); }
+.doc-fields { margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; }
+.doc-field { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.doc-field.is-wide { grid-column: 1 / -1; }
+.doc-field dt { font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.doc-field dd { margin: 0; min-height: 38px; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--r-sm);
+                background: var(--surface-2); font-size: 14px; line-height: 1.45; overflow-wrap: anywhere; white-space: pre-wrap; }
+.doc-field.is-wide dd { max-height: 9.5em; overflow: auto; }
+/* what this push changes */
+.doc-field.is-change dt { color: var(--brand-text); }
+.doc-field.is-change dd { background: var(--brand-soft); border-color: color-mix(in srgb, var(--brand) 45%, transparent); font-weight: 600; }
+.doc-field del { margin-right: 8px; color: var(--muted); font-weight: 400; }
+/* No room for two: the row sits under the form's fields, inside the sheet. */
+.pair-doc.is-inline { max-height: none; overflow: visible; padding-top: 16px; background: none; border: 0;
+                      border-top: 1px solid var(--line); border-radius: 0; box-shadow: none; }
+.pair-doc.is-inline .doc-head { padding: 0 0 14px; }
+.pair-doc.is-inline .doc-body { overflow: visible; padding: 16px 0 0; margin: 0; }
+@media (max-width: 960px) {
+  .modal.pair { width: min(560px, calc(100% - 32px)); }
+  .modal.pair[open] { display: block; }
+}
+@media (max-width: 640px) {
+  .modal.pair { width: 100%; }
+  .pair-form { max-height: 94dvh; border-radius: var(--r-xl) var(--r-xl) 0 0; border-bottom: 0; }
+}
+@media (max-width: 480px) {
+  .doc-fields { grid-template-columns: minmax(0, 1fr); }
+}
+
 /* ---- responsive ------------------------------------------------------------------ */
 /* Wide screens: the Inbox and the Universe side by side, each scrolling on its own,
    so a pushed brief can be seen landing in the table. */
@@ -141,68 +233,17 @@ main { padding-bottom: 120px; }
   .view.workspace.active { display: grid; }
   main:has(.workspace.active) { padding-bottom: 20px; max-width: 1600px; }
   .tabs { grid-area: tabs; position: static; margin: 0; }
-  .tab-universe { display: none; }
+  .tab { padding: 0 6px; }   /* five tabs and their counts fit the 460px column */
   .pane-inbox { grid-area: inbox; overflow: auto; padding: 2px 6px 24px 2px; margin: -2px -6px 0 -2px; scrollbar-gutter: stable; }
   .pane-universe { grid-area: uni; margin: 0; display: flex; flex-direction: column; min-height: 0; }
   .uni-wrap { flex: 1; min-height: 0; overflow: auto; }
 }
-/* Narrower screens: one view at a time; the table's header sticks under the tab strip. */
+/* Narrower screens: just the list (no room for the table beside it). */
 @media (max-width: 1279.98px) {
-  .workspace[data-show="universe"] .pane-inbox { display: none; }
-  .workspace[data-show="inbox"] .pane-universe { display: none; }
-  .pane-universe { margin-top: 0; }
-  .uni thead th { top: calc(var(--topbar) + 8px + var(--tabs-h) + 6px); }
-  .uni-wrap .uni { border-radius: var(--r-lg); }
-  .uni thead th:first-child { border-top-left-radius: var(--r-lg); }
-  .uni thead th:last-child { border-top-right-radius: var(--r-lg); }
-}
-@media (max-width: 1279.98px) and (min-width: 1024px) {
-  .workspace[data-show="universe"] { max-width: 1240px; }
-}
-/* Below 1024 px the columns don't fit: each row becomes a compact stacked item, in
-   Polaris's own order. (.tbl.uni so these beat the base's simpler ≤720 px stacking.) */
-@media (max-width: 1023.98px) {
-  .tbl.uni thead { display: none; }
-  .tbl.uni, .tbl.uni tbody { display: block; }
-  .tbl.uni tr.urow { display: flex; flex-wrap: wrap; align-items: baseline; padding: 10px 14px; border-bottom: 1px solid var(--line); }
-  .tbl.uni tr.group { display: block; padding: 0; border-bottom: 0; }
-  .tbl.uni tr.group th { display: block; border-bottom: 1px solid var(--line); }
-  .tbl.uni td { display: block; padding: 0; border: 0; min-width: 0 !important; }
-  .tbl.uni td.brk { display: block; flex-basis: 100%; height: 0; }
-  /* stacked: project + amount / client · code + date / BD, AM */
-  .tbl.uni td.c-project { order: 1; flex: 1 1 0; font-size: 14.5px; }
-  .tbl.uni td.c-amount { order: 2; flex: none; padding-left: 12px; font-weight: 700; color: var(--ink); }
-  .tbl.uni td.b1 { order: 3; }
-  .tbl.uni td.c-client { order: 4; font-size: 13px; color: var(--muted); }
-  .tbl.uni td.c-client:not(:empty)::after { content: "·"; margin: 0 6px; }
-  .tbl.uni td.c-code { order: 5; font-size: 12px; color: var(--muted); }
-  .tbl.uni td.c-date { order: 6; margin-left: auto; font-size: 12.5px; padding-left: 10px; }
-  .tbl.uni td.b2 { order: 7; }
-  .tbl.uni td.c-bd { order: 8; }
-  .tbl.uni td.c-am { order: 9; }
-  .tbl.uni td.c-people { font-size: 12.5px; color: var(--muted); margin-right: 12px; margin-top: 2px; }
-  .tbl.uni td:empty:not(.brk) { display: none; }
-  .tbl.uni td[data-label]::before { content: attr(data-label) " "; font-weight: 700; color: var(--ink-2); }
-  .tbl.uni tbody tr.urow:hover td { background: none; }
-  .tbl.uni tbody tr.urow.is-new { animation: landed 3.2s var(--ease); }
-  .tbl.uni tbody tr.urow.is-new td { animation: none; }
-  /* the header row is hidden, so round the first group instead */
-  .tbl.uni tbody:first-of-type tr.group:first-child th { border-radius: var(--r-lg) var(--r-lg) 0 0; }
-  .tbl.uni tbody:last-of-type tr:last-child { border-bottom: 0; }
-  /* Collections: AR name + amount / code, AM, edit / remarks */
-  .tbl.uni.coll td.c-ar { order: 1; flex: 1 1 0; font-size: 14.5px; font-weight: 650; color: var(--ink); }
-  .tbl.uni.coll td.c-amount { order: 2; }
-  .tbl.uni.coll td.b1 { order: 3; }
-  .tbl.uni.coll td.c-code { order: 4; }
-  .tbl.uni.coll td.c-am { order: 5; margin-left: 10px; }
-  .tbl.uni.coll td.c-act { order: 6; margin-left: auto; width: auto; align-self: center; }
-  .tbl.uni.coll td.b2 { order: 7; }
-  .tbl.uni.coll td.c-remarks { order: 8; max-width: none; font-size: 12.5px; margin-top: 4px; }
-  .tbl.uni.coll td.c-cur, .tbl.uni.coll td.c-status { display: none; }
+  .pane-universe { display: none; }
 }
 @media (max-width: 640px) {
   .workspace { margin-top: 14px; }
-  .pane-head .page-tools .search { flex: 1; width: auto; }
 }
 @media (max-width: 420px) {
   .tab { font-size: 13px; gap: 4px; }

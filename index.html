@@ -67,7 +67,7 @@
     (function () {
       var v = window.APP_BUILD = Date.now().toString(36);
       var files = ["js/config.js", "js/sync.js", "js/ops.js", "js/icons.js", "js/ui.js", "js/polaris-ui.js", "js/errors.js",
-                   "js/service.js", "js/settings.js", "js/net.js", "js/auth.js", "js/inbox.js", "js/universe.js", "js/collections.js", "js/app.js"];
+                   "js/service.js", "js/settings.js", "js/net.js", "js/auth.js", "js/inbox.js", "js/universe.js", "js/collections.js", "js/queue.js", "js/rowdoc.js", "js/app.js"];
       var map = { imports: {} };
       files.forEach(function (f) { map.imports[new URL(f, location.href).href] = new URL(f + "?v=" + v, location.href).href; });
       document.write('<link rel="stylesheet" href="css/theme.css?v=' + v + '">');
@@ -95,6 +95,11 @@
       <a class="override-badge" id="overrideBadge" href="#/settings" hidden>Overridden</a>
       <nav class="nav" aria-label="Main">
         <a href="#/briefs" data-nav="work" id="workLink" hidden>Data Audit</a>
+        <!-- Pushes waiting for Lark; hovering shows the next five (js/queue.js). -->
+        <div class="queue-wrap">
+          <a href="#/queue" data-nav="queue" id="queueLink" hidden>Queue <span class="count" id="queueCount"></span><span class="count count-bad" id="queueBad" hidden></span></a>
+          <div class="queue-peek is-empty" id="queuePeek" aria-hidden="true"></div>
+        </div>
         <a href="#/settings" data-nav="settings" class="nav-icon" aria-label="Settings" title="Settings"><span class="i" data-icon="gear" aria-hidden="true"></span></a>
       </nav>
       <a class="session-pill" id="sessionPill" href="#/settings" hidden>
@@ -144,7 +149,6 @@
         <a class="tab" href="#/invoices" data-tab="invoice">Invoices <span class="count" data-count="invoice"></span></a>
         <a class="tab" href="#/andon" data-tab="andon">ANDON <span class="count" data-count="andon"></span></a>
         <a class="tab" href="#/audit" data-tab="audit" title="Universe and ANDON cells left blank that the Project Brief can fill">Audit <span class="count" data-count="audit"></span></a>
-        <a class="tab tab-universe" href="#/universe" data-tab="universe" id="sideTab">Universe</a>
       </nav>
 
       <section class="pane pane-inbox" aria-label="Inbox">
@@ -220,6 +224,21 @@
       </section>
     </section>
 
+    <!-- Queue: pushes waiting for Lark, failed and finished --------------------->
+    <section class="view view-queue" data-view="queue" aria-labelledby="queueTitle">
+      <div class="page-head">
+        <h1 id="queueTitle">Queue</h1>
+        <div class="page-tools" id="queueTools"></div>
+      </div>
+      <div class="callout callout-warn" id="queuePaused" role="status" hidden></div>
+      <div class="queue-page">
+        <section id="queueFailed" aria-label="Failed" hidden></section>
+        <section id="queueWaiting" aria-label="Waiting" hidden></section>
+        <section id="queueDone" aria-label="Finished" hidden></section>
+        <p class="empty small" id="queueEmpty" hidden>The queue is empty.</p>
+      </div>
+    </section>
+
     <!-- Settings ------------------------------------------------------------------>
     <section class="view view-settings" data-view="settings" aria-labelledby="settingsTitle">
       <div class="page-head"><div><h1 id="settingsTitle">Settings</h1><p class="lede sm">Saved in this browser only.</p></div></div>
@@ -266,8 +285,8 @@
   </main>
 
   <!-- Push confirmation ------------------------------------------------------------>
-  <dialog class="modal wide" id="sheet" aria-labelledby="sheetTitle">
-    <form class="modal-form" id="sheetForm">
+  <dialog class="modal pair" id="sheet" aria-labelledby="sheetTitle">
+    <form class="modal-form pair-form" id="sheetForm">
       <header class="modal-head">
         <h2 id="sheetTitle"></h2>
         <p class="modal-sub" id="sheetSub"></p>
@@ -279,6 +298,8 @@
         <button type="button" class="btn btn-primary" id="sheetGo"><span class="label"></span></button>
       </footer>
     </form>
+    <!-- The Lark row this push changes, as it will be (js/rowdoc.js) -->
+    <section class="pair-doc row-doc" id="sheetDoc" aria-label="The row in Lark"></section>
   </dialog>
 
   <!-- Invoice details (typed in by finance) ---------------------------------------->
@@ -300,7 +321,7 @@
           <ul class="files" id="dFiles"></ul>
           <label class="btn btn-sm file-btn"><span class="i" data-icon="plus" aria-hidden="true"></span> Add a file
             <input type="file" id="dFile" multiple hidden></label>
-          <p class="set-sub">PDF or image, up to 10 MB each. Files are uploaded when you save.</p>
+          <p class="set-sub">PDF or image, up to 10 MB.</p>
         </div>
       </div>
       <p class="form-error" id="detailsError" role="alert" hidden></p>

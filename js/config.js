@@ -85,6 +85,15 @@ export const RULES = {
   // Invoices list. Ignore stays off for those cards until the column exists.
   universeIgnoreField: "IGNORE",
 
+  // The audit: Universe projects that are won (by Status, or by Mancom Phase) must
+  // have these columns filled. The brief doesn't have them, so the Audit tab asks
+  // for them, and a Fill on such a project is refused while either is blank.
+  auditRequired: {
+    statuses: ["Fully Closed", "For Closing", "For Collection", "Signed CE", "Won - Awaiting CE Signature"],
+    mancomPhases: ["7. Won"],
+    fields: ["Sign Date", "Month"],
+  },
+
   // Date-only fields (RFP Received Date) are stored as midnight in this offset.
   utcOffsetHours: 8,    // Asia/Manila
 

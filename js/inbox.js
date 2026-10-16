@@ -2,13 +2,14 @@
    sheet (with the BD picker), and Ignore with Undo. */
 
 import { RULES } from "./config.js";
-import { TABLE_TITLES, pushBrief, pushPar, pushCollections, pushAndon, setIgnore, AlreadyDone, newClientToken, writableOnly, fillGaps } from "./ops.js";
+import { TABLE_TITLES, pushBrief, pushPar, pushCollections, pushAndon, setIgnore, newClientToken, writableOnly, fillGaps } from "./ops.js";
 import {
-  universeFromBrief, collectionsChange, stepStatus, parAfterAdding, defaultVat, amountFormula, vatMentions,
-  vatExAmount, people, andonFromBrief, auditPatch,
+  universeFromBrief, collectionsChange, stepStatus, parAfterAdding, defaultVat, vatMentions,
+  people, andonFromBrief, auditPatch, auditMissing,
 } from "./sync.js";
 import { $, h, ic, toast, fmt, flash, copyable, store, collapse, busy, radioKeys } from "./ui.js";
-import { dayOnly, copyableText, dateField } from "./polaris-ui.js";
+import { copyableText, dateField } from "./polaris-ui.js";
+import { createRowDoc } from "./rowdoc.js";
 import { describe, isDeadToken, isUncertain, uploadToBase } from "./net.js";
 
 const NOUN = { brief: "briefs", par: "PARs", invoice: "invoices", andon: "briefs for ANDON", audit: "projects with blanks" };
@@ -28,9 +29,6 @@ const VOID_BADGE = "badge-err";
 // A sheet that's cancelled keeps what was typed, per card and step (a request
 // comes back as a new card when it's approved).
 const draftKey = (c) => `${c.kind}:${c.step || ""}:${c.id}`;
-const DATE_FIELDS = new Set(["Project Start", "Project End", "RFP Received Date"]);
-// Shown as inputs at the top of the brief sheet, so not repeated under "Also written".
-const BRIEF_INPUTS = new Set(["Client", "BD", "VAT%", "Amount (VAT-Ex.) (PHP)", "Other Links"]);
 
 export function createInbox(ctx) {
   const { S } = ctx;
@@ -105,8 +103,16 @@ export function createInbox(ctx) {
     if (!S.lists) { box.replaceChildren(); empty.hidden = true; hiddenNote.textContent = ""; return; }
     const list = S.lists[S.tab];
     const q = S.query[S.tab] || "";
-    const cards = list.cards.filter(c => matches(c, q));
+    const cards = list.cards.filter(c => !ctx.queue.hides(c) && matches(c, q));   // queued ones have left
+    // Re-rendering mustn't lose the keyboard's place (the queue re-renders as pushes land).
+    const had = document.activeElement && document.activeElement.closest && document.activeElement.closest("#cards .item");
+    const hadBtn = had ? [...had.querySelectorAll("button")].indexOf(document.activeElement) : -1;
     box.replaceChildren(...cards.map(cardEl));
+    if (had && hadBtn >= 0) {
+      const again = box.querySelector(`[data-id="${CSS.escape(had.dataset.id)}"]`);
+      const btn = again && again.querySelectorAll("button")[hadBtn];
+      if (btn) btn.focus({ preventScroll: true });
+    }
     empty.hidden = cards.length > 0;
     empty.textContent = q ? `No ${NOUN[S.tab]} match "${q.trim()}".`
       : { brief: "Every brief is in the Universe. Nice work!",
@@ -270,6 +276,14 @@ export function createInbox(ctx) {
 
   cancel.addEventListener("click", () => { if (!sheet || !sheet.busy) dialog.close(); });
   dialog.addEventListener("cancel", (e) => { if (sheet && sheet.busy) e.preventDefault(); });
+  // A click on the backdrop (or the gap between the two cards) is Cancel. Only one that
+  // starts there too, so a text selection dragged out of a field doesn't close it.
+  let downOnBackdrop = false;
+  dialog.addEventListener("pointerdown", (e) => { downOnBackdrop = e.target === dialog; });
+  dialog.addEventListener("click", (e) => {
+    if (e.target === dialog && downOnBackdrop && !(sheet && sheet.busy)) dialog.close();
+    downOnBackdrop = false;
+  });
   dialog.addEventListener("close", () => {
     if (sheet && !sheet.done) S.drafts.set(draftKey(sheet.card) + (sheet.invalid ? ":invalid" : ""), { choices: sheet.choices, clientToken: sheet.clientToken, targetId: sheet.targetId });
     sheet = null;
@@ -277,22 +291,26 @@ export function createInbox(ctx) {
   $("#sheetForm").addEventListener("submit", (e) => e.preventDefault());   // Enter in a field mustn't send
   go.addEventListener("click", runPush);
 
+  // Beside the form: the Lark row as it will be after this push (js/rowdoc.js).
+  // Where there's no room for two side by side, it sits under the form's fields.
+  const rowDoc = createRowDoc(ctx);
+  const docBox = $("#sheetDoc");
+  const narrow = matchMedia("(max-width: 960px)");
+  function placeDoc() {
+    if (narrow.matches) $("#sheetBody").append(docBox); else dialog.append(docBox);
+    docBox.classList.toggle("is-inline", narrow.matches);
+  }
+  narrow.addEventListener("change", placeDoc);
+  function paintDoc() {
+    if (!sheet) return;
+    rowDoc.render(docBox, preview(sheet.card, { choices: sheet.choices, targetId: sheet.targetId, invalid: sheet.invalid }));
+  }
+
   /* ======================= the audit: blanks the brief can fill ======================= */
   const AUDIT_WHERE = { universe: "Universe", andon: "ANDON" };
   const auditRow = (c) => (S.data[c.target] || []).find(r => r.record_id === c.rowId) || { fields: {} };
   const auditOpts = (c) => (c.target === "andon" ? { options: ctx.optionsOf("andon"), fields: ctx.fieldsOf("andon") } : {});
   const AUDIT_DATES = new Set(["Project Start", "Project End", "RFP Received Date", "Event Start", "Event End"]);
-
-  /* A value the audit would write, as text (people by name, dates as days). */
-  function auditText(c, k, v) {
-    const names = new Map();
-    for (const f of ["AM", "MKT", "BD"]) people(c.brief.record.fields[f]).forEach(u => names.set(u.id, u.name));
-    if (Array.isArray(v)) return v.map(x => (x && x.id ? names.get(x.id) || x.id : String(x))).join(", ");
-    if (v && typeof v === "object") return v.text || v.link || "";
-    if (AUDIT_DATES.has(k)) return dayOnly(v);
-    if (k === "Amount (VAT-Ex.) (PHP)") return fmt.peso(v);
-    return String(v);
-  }
 
   function auditCardEl(c) {
     const writable = ctx.canWriteFor(`audit:${c.target}`);
@@ -303,8 +321,11 @@ export function createInbox(ctx) {
         h("span", { class: "badge badge-info" }, AUDIT_WHERE[c.target]),
         h("span", { class: "item-date" }, c.submittedAt ? `Brief ${fmt.day(c.submittedAt)}` : "")),
       h("h3", null, c.name || "(no name)"),
-      h("p", { class: "item-meta" }, h("b", null, `${c.gaps.length} blank`), ` in ${AUDIT_WHERE[c.target]} that the brief `,
-        copyable(c.requestNo, { label: "request number" }), " can fill", c.status ? ` · ${c.status}` : ""),
+      // "…that the brief can fill" only when it can fill all of them (Sign Date and Month it never has).
+      h("p", { class: "item-meta" }, h("b", null, `${c.gaps.length} blank`), ` in ${AUDIT_WHERE[c.target]}`,
+        c.requestNo ? ((c.required || []).length ? [" · brief ", copyable(c.requestNo, { label: "request number" })]
+          : [" that the brief ", copyable(c.requestNo, { label: "request number" }), " can fill"]) : "",
+        c.status ? ` · ${c.status}` : ""),
       h("ul", { class: "notes" }, h("li", { class: "flow" }, h("span", { class: "flow-row" }, "Missing"),
         h("span", { class: "flow-step" }, c.gaps.join(" · ")))),
       h("div", { class: "item-actions" },
@@ -336,36 +357,29 @@ export function createInbox(ctx) {
     const types = new Map(ctx.fieldsOf(c.target).map(f => [f.field_name, f.type]));
     const selects = ctx.optionsOf(c.target);
     const AMOUNT = "Amount (VAT-Ex.) (PHP)";
-    // Names for people shown in "Will be written" (the brief's, plus anyone picked here).
+    // Names for the people in the row beside the sheet (the brief's, plus anyone picked here).
     ch.names = ch.names || new Map();
-    for (const f of ["AM", "MKT", "BD"]) people(c.brief.record.fields[f]).forEach(u => ch.names.set(u.id, u.name));
+    if (c.brief) for (const f of ["AM", "MKT", "BD"]) people(c.brief.record.fields[f]).forEach(u => ch.names.set(u.id, u.name));
     const fromBrief = () => auditPatch(c, row, { fields: c.gaps, vat: ch.vat }, RULES, opts);
     if (!ch.values) ch.values = { ...fromBrief() };
     ch.edited = ch.edited || [];
     ch.bad = ch.bad || [];
 
-    const written = h("dl", { class: "written" });
     const vatBox = h("div", { class: "field" });
-    const show = (k, v) => {
-      if (Array.isArray(v)) return v.map(x => (x && x.id ? ch.names.get(x.id) || x.id : String(x))).join(", ");
-      if (AUDIT_DATES.has(k)) return dayOnly(v);
-      if (k === AMOUNT) return fmt.peso(v);
-      return String(v);
-    };
     const refresh = () => {
       const patch = auditPatch(c, row, ch, RULES, opts);
       const n = Object.keys(patch).length;
       const bad = ch.bad.filter(k => ch.fields.includes(k));
+      const missing = auditMissing(c, patch);
       sheet.blocked = bad.length ? `Check ${bad.join(", ")}: ${bad.length === 1 ? "it isn't" : "they aren't"} valid yet.`
+        : missing.length ? `A won project needs ${missing.join(" and ")}.`
         : n ? "" : "Tick at least one field to fill.";
       go.disabled = sheet.busy || !!sheet.blocked;
       if (!sheet.busy) go.querySelector(".label").textContent = n ? `Fill ${n} field${n === 1 ? "" : "s"}` : "Fill";
-      blockNote.hidden = !sheet.blocked || !n;
+      blockNote.hidden = !sheet.blocked || (!n && !missing.length);
       blockNote.textContent = sheet.blocked;
       vatBox.hidden = !(c.needsVat && ch.fields.includes(AMOUNT));
-      written.replaceChildren(...Object.entries(patch).flatMap(([k, v]) => [h("dt", null, k),
-        h("dd", { class: String(v).length > 140 ? "is-long" : "" }, show(k, v),
-          h("span", { class: "why" }, ch.edited.includes(k) ? "Was blank. Edited here." : "Was blank. From the brief."))]));
+      paintDoc();
     };
     sheet.refresh = refresh;
     const blockNote = h("p", { class: "note", role: "status", hidden: true });
@@ -427,6 +441,8 @@ export function createInbox(ctx) {
     };
     const rows = c.gaps.map((k) => {
       const box = h("input", { type: "checkbox", id: `gap-${k.replace(/\W+/g, "-")}`, "aria-label": `Fill ${k}` });
+      // A required column can't be left out: always ticked.
+      if ((c.required || []).includes(k)) { box.disabled = true; if (!ch.fields.includes(k)) ch.fields.push(k); }
       box.checked = ch.fields.includes(k);
       tick[k] = box;
       box.addEventListener("change", () => {
@@ -450,14 +466,9 @@ export function createInbox(ctx) {
           refresh();
         } }, v)));
       radioKeys(seg);
-      vatBox.replaceChildren(h("span", { class: "field-label" }, "VAT"), seg,
-        h("p", { class: "set-sub" }, "The row has no VAT%, so the amount needs one. It's written to VAT% too."));
+      vatBox.replaceChildren(h("span", { class: "field-label" }, "VAT"), seg);
     }
-    put(body,
-      h("p", { class: "set-sub" }, copyableText(`Blank in the ${AUDIT_WHERE[c.target]} row. Filled in from brief ${c.requestNo}; ` +
-        "change anything that's out of date. Cells that have a value are never changed.")),
-      h("div", { class: "gaps" }, rows), vatBox, blockNote,
-      h("p", { class: "subhead" }, "Will be written"), written);
+    put(body, h("div", { class: "gaps" }, rows), vatBox, blockNote);
     refresh();
   }
 
@@ -467,7 +478,7 @@ export function createInbox(ctx) {
       return { targetId: c.target, arName: c.name, invoiceNo: "", siNo: "", invoiceDate: null, invoiceDateOk: true, files: [], showDetails: false };
     }
     if (c.kind === "andon") return { pm: [], tribe: "" };
-    if (c.kind === "audit") return { fields: [...c.gaps], vat: defaultVat(c.brief.currency), values: null, edited: [], bad: [] };
+    if (c.kind === "audit") return { fields: [...c.gaps], vat: defaultVat(c.brief ? c.brief.currency : "PHP"), values: null, edited: [], bad: [] };
     return {};
   }
 
@@ -498,6 +509,8 @@ export function createInbox(ctx) {
     else if (c.kind === "andon") buildAndon(body, c);
     else if (c.kind === "audit") buildAudit(body, c);
     else buildInvoice(body, c);
+    placeDoc();
+    paintDoc();
     setBusy(false);
     dialog.showModal();
     const first = body.querySelector("input, select, textarea");
@@ -519,26 +532,11 @@ export function createInbox(ctx) {
   /* --- brief --- */
   function buildBrief(body, c) {
     const ch = sheet.choices;
-    const amountEl = h("div", { class: "amount" });
-    const written = h("dl", { class: "written" });
-    const refresh = () => {
-      const amount = vatExAmount(c.value, c.currency, ch.vat, RULES);
-      amountEl.replaceChildren(
-        h("b", null, amount === null ? "Not written" : fmt.peso(amount)),
-        h("span", null, `Amount (VAT-Ex.) (PHP) · ${amountFormula(c.value, c.currency, ch.vat, RULES)}`));
-      const payload = universeFromBrief(c, ch, RULES);
-      const names = new Map();
-      for (const k of ["AM", "MKT"]) people(c.record.fields[k]).forEach(u => names.set(u.id, u.name));
-      written.replaceChildren(...Object.entries(payload).filter(([k]) => !BRIEF_INPUTS.has(k)).flatMap(([k, v]) => {
-        let text = Array.isArray(v) ? v.map(u => names.get(u.id) || u.id).join(", ")
-                 : DATE_FIELDS.has(k) ? dayOnly(v) : String(v);
-        return [h("dt", null, k), h("dd", { class: text.length > 140 || text.includes("\n") ? "is-long" : "" }, text)];
-      }));
-    };
+    const refresh = paintDoc;
     sheet.refresh = refresh;
 
     const client = suggestInput({
-      id: "sheetClient", value: ch.client, placeholder: "Not on the brief. Type or pick a client",
+      id: "sheetClient", value: ch.client, placeholder: "Type or pick a client",
       options: S.clients, onChange: (v) => { ch.client = v; refresh(); },
     });
     const bd = peoplePicker({
@@ -569,11 +567,9 @@ export function createInbox(ctx) {
     put(body,
       fieldEl("Client", true, client, "sheetClient"),
       fieldEl("BD", true, bd, "sheetBd"),
-      h("div", { class: "field" }, h("span", { class: "field-label" }, "VAT"), h("div", { class: "vat" }, vatSeg, amountEl)),
+      h("div", { class: "field" }, h("span", { class: "field-label" }, "VAT"), vatSeg),
       said.length ? h("p", { class: "note" }, `Note: the brief says "${said.join(" ")}"`) : null,
-      linksBox,
-      h("p", { class: "subhead" }, "Also written"),
-      written);
+      linksBox);
     refresh();
   }
 
@@ -583,18 +579,7 @@ export function createInbox(ctx) {
   }
   function buildAndon(body, c) {
     const ch = sheet.choices;
-    const written = h("dl", { class: "written" });
-    const refresh = () => {
-      const payload = andonPayload(c, ch);
-      const names = new Map();
-      for (const k of ["AM", "MKT"]) people(c.record.fields[k]).forEach(u => names.set(u.id, u.name));
-      written.replaceChildren(...Object.entries(payload).filter(([k]) => k !== "PM (LEAD)" && k !== "TRIBE").flatMap(([k, v]) => {
-        const text = Array.isArray(v) ? v.map(x => (x && x.id ? names.get(x.id) || x.id : String(x))).join(", ")
-                   : v && typeof v === "object" ? v.text || v.link
-                   : k.startsWith("Event ") ? dayOnly(v) : String(v);
-        return [h("dt", null, k), h("dd", { class: text.length > 140 || text.includes("\n") ? "is-long" : "" }, text)];
-      }));
-    };
+    const refresh = paintDoc;
     sheet.refresh = refresh;
     const pm = peoplePicker({
       id: "sheetPm", selected: ch.pm, pool: S.pmPool, placeholder: "Pick the lead PM", single: true,
@@ -604,27 +589,15 @@ export function createInbox(ctx) {
     const tribe = h("select", { id: "sheetTribe" }, h("option", { value: "" }, "Not set"), tribes.map(t => h("option", { value: t }, t)));
     tribe.value = ch.tribe;
     tribe.addEventListener("change", () => { ch.tribe = tribe.value; refresh(); });
-    const computed = ctx.computedOf("andon");
     put(body,
       fieldEl("PM (LEAD)", true, pm, "sheetPm"),
-      fieldEl("TRIBE", true, h("label", { class: "select" }, tribe), "sheetTribe"),
-      computed.length ? h("p", { class: "set-sub" }, `ANDON fills ${computed.join(", ")} itself.`) : null,
-      h("p", { class: "subhead" }, "Also written"),
-      written);
+      fieldEl("TRIBE", true, h("label", { class: "select" }, tribe), "sheetTribe"));
     refresh();
   }
 
   /* --- PAR --- */
   function buildPar(body, c) {
-    const written = h("dl", { class: "written" });
-    const ctxLine = h("p", { class: "set-sub" });
-    const refresh = () => {
-      const row = c.targets.find(t => t.id === sheet.targetId) || c.target;
-      const next = parAfterAdding(row.par, c.requestNo) || row.par;
-      ctxLine.replaceChildren(...copyableText(`Goes into the Universe row "${row.project || row.codeText}" (${c.code}).`));
-      written.replaceChildren(h("dt", null, "PAR"),
-        h("dd", null, copyableText(next), h("span", { class: "why" }, row.par ? `Was ${row.par}. The new number is added after it.` : "Was empty.")));
-    };
+    const refresh = paintDoc;
     sheet.refresh = refresh;
     if (c.targets.length > 1) {
       const sel = h("select", { id: "sheetTarget" },
@@ -633,8 +606,7 @@ export function createInbox(ctx) {
       sel.addEventListener("change", () => { sheet.targetId = sel.value; refresh(); });
       body.append(fieldEl(`Universe row (${c.targets.length} rows share ${c.code})`, false, h("label", { class: "select" }, sel), "sheetTarget"));
     }
-    put(body, ctxLine, c.notes.length ? h("p", { class: "note" }, copyableText(`Note: ${c.notes.join(" ")}`)) : null,
-                h("p", { class: "subhead" }, "Will be written"), written);
+    put(body, c.notes.length ? h("p", { class: "note" }, copyableText(`Note: ${c.notes.join(" ")}`)) : null);
     refresh();
   }
 
@@ -648,23 +620,18 @@ export function createInbox(ctx) {
     return c.step === "filed" ? ["Mark as pending approval", "Mark pending"] : ["Move to For Collection", "Move to For Collection"];
   }
   const rowMoney = (row) => (row.amount === null ? "no amount" : fmt.money(row.amount, row.currency));
-  const cellText = (k, v) => (v === null || v === undefined || v === "" ? "(empty)"
-    : k === "Invoice Amount" ? fmt.money(v) : String(v));
 
   function buildInvoice(body, c) {
     const ch = sheet.choices;
     const opts = ctx.collectionOptions();
-    const flow = h("p", { class: "flow flow-sheet" });
     const arField = h("div", { class: "field" });
     const blockNote = h("p", { class: "note", role: "status" });
-    const written = h("dl", { class: "written" });
     const details = h("div", { class: "field" });
     const refresh = () => {
       const change = collectionsChange(c, ch, opts, RULES);
       const [title, label] = verbs(c, change.action, ch.invalid);
       $("#sheetTitle").textContent = title;
       if (!sheet.busy) go.querySelector(".label").textContent = label;
-      flow.replaceChildren(...flowEl(c, ch.targetId, ch.invalid));
       arField.hidden = change.mode !== "create";
       details.hidden = c.step !== "approved";
       sheet.blocked = (change.mode === "create" && !ch.invalid ? c.noNew : "")
@@ -672,11 +639,7 @@ export function createInbox(ctx) {
       blockNote.hidden = !sheet.blocked;
       blockNote.textContent = sheet.blocked;
       go.disabled = sheet.busy || !!sheet.blocked;
-      written.replaceChildren(...Object.entries(change.fields)
-        .filter(([k]) => change.mode !== "create" || k !== "AR Name")
-        .flatMap(([k, v]) => [h("dt", null, k), h("dd", null, cellText(k, v),
-          change.mode === "update" ? h("span", { class: "why" }, change.before[k] === null || change.before[k] === undefined
-            ? "Was empty." : `Was ${cellText(k, change.before[k])}.`) : null)]));
+      paintDoc();
     };
     sheet.refresh = refresh;
 
@@ -701,153 +664,161 @@ export function createInbox(ctx) {
     // Invoice details, once the request is approved and the invoice issued (optional;
     // they can also be added later from the Collections pane).
     const showDetails = () => {
-      const text = (id, key, label, placeholder) => {
+      const text = (id, key, label, placeholder, onInput) => {
         const el = h("input", { type: "text", id, autocomplete: "off", placeholder });
         el.value = ch[key];
-        el.addEventListener("input", () => { ch[key] = el.value; });
+        el.addEventListener("input", () => { ch[key] = el.value; onInput(); });
         return fieldEl(label, true, el, id);
       };
       const date = dateField({ id: "sheetInvDate", value: ch.invoiceDate,
         onChange: (ms, ok) => { ch.invoiceDate = ms; ch.invoiceDateOk = ok; refresh(); } });
       const list = h("ul", { class: "files" });
-      const paint = () => list.replaceChildren(...ch.files.map((f, i) => h("li", null, ic("link"),
-        h("span", { class: "file-name" }, f.name, " ", h("span", { class: "file-size" }, `(${Math.max(1, Math.round(f.size / 1024)).toLocaleString()} KB)`)),
-        h("button", { type: "button", "aria-label": `Remove ${f.name}`, onclick: () => { ch.files.splice(i, 1); paint(); } }, ic("x")))));
+      const paint = () => {
+        list.replaceChildren(...ch.files.map((f, i) => h("li", null, ic("link"),
+          h("span", { class: "file-name" }, f.name, " ", h("span", { class: "file-size" }, `(${Math.max(1, Math.round(f.size / 1024)).toLocaleString()} KB)`)),
+          h("button", { type: "button", "aria-label": `Remove ${f.name}`, onclick: () => { ch.files.splice(i, 1); paint(); } }, ic("x")))));
+        refresh();
+      };
       const input = h("input", { type: "file", multiple: true, hidden: true });
       input.addEventListener("change", () => { for (const file of input.files) ch.files.push({ name: file.name, size: file.size, file }); input.value = ""; paint(); });
       paint();
       details.replaceChildren(
         h("p", { class: "subhead" }, "Invoice details"),
-        text("sheetInvNo", "invoiceNo", "Invoice Number", "e.g. INV-1680"),
-        text("sheetSiNo", "siNo", "SI Number", "e.g. 610"),
+        text("sheetInvNo", "invoiceNo", "Invoice Number", "e.g. INV-1680", refresh),
+        text("sheetSiNo", "siNo", "SI Number", "e.g. 610", refresh),
         fieldEl("Invoice Date", true, date, "sheetInvDate"),
         h("div", { class: "field" }, h("span", { class: "field-label" }, "Invoice", h("em", null, " (optional)")), list,
           h("label", { class: "btn btn-sm file-btn" }, ic("plus"), "Add a file", input),
-          h("p", { class: "set-sub" }, "PDF or image, up to 10 MB each. Uploaded when you push.")));
+          h("p", { class: "set-sub" }, "PDF or image, up to 10 MB.")));
       details.style.gap = "12px";
     };
     if (ch.showDetails || ch.invoiceNo || ch.files.length) showDetails();
     else details.replaceChildren(h("button", { type: "button", class: "linkish", onclick: () => {
-      ch.showDetails = true; showDetails(); $("#sheetInvNo").focus(); } }, ic("plus"), "Add invoice details (number, SI, date, file)"));
+      ch.showDetails = true; showDetails(); $("#sheetInvNo").focus(); } }, ic("plus"), "Add invoice details"));
 
-    put(body, picker, flow, arField, blockNote,
+    put(body, picker, arField, blockNote,
                 c.notes.length ? h("p", { class: "note" }, copyableText(`Note: ${c.notes.join(" ")}`)) : null,
-                details,
-                h("p", { class: "subhead" }, "Will be written"), written);
+                details);
     refresh();
   }
 
   /* Invoice details from the sheet, in Lark's write format (files uploaded first,
-     with their progress on the button; tokens are kept on the sheet so a retry
-     doesn't upload them twice). */
-  async function invoiceDetails(ch) {
+     their progress reported through onStatus; tokens are kept on the job so a
+     retry doesn't upload them twice). */
+  async function invoiceDetails(ch, onStatus) {
     const out = {};
     if (ch.invoiceNo.trim()) out["Invoice Number"] = ch.invoiceNo.trim();
     if (ch.siNo.trim()) out["SI Number"] = ch.siNo.trim();
     if (ch.invoiceDate) out["Invoice Date"] = ch.invoiceDate;   // already midnight Manila
     const todo = ch.files.filter(f => !f.file_token);
-    const label = go.querySelector(".label");
     for (let i = 0; i < todo.length; i++) {
       const what = todo.length > 1 ? `Uploading ${i + 1} of ${todo.length}` : "Uploading";
-      label.textContent = `${what}…`;
+      onStatus(`${what}…`);
       todo[i].file_token = await uploadToBase(todo[i].file, ctx.tables.collections, ctx.token(),
-        { onProgress: (p) => { label.textContent = `${what} ${Math.round(p * 100)}%`; } });
+        { onProgress: (p) => onStatus(`${what} ${Math.round(p * 100)}%`) });
     }
     if (ch.files.length) out["Invoice"] = ch.files.map(f => ({ file_token: f.file_token }));
-    label.textContent = "Pushing…";
+    onStatus("Pushing…");
     return out;
   }
 
+  /* Push: the sheet closes at once and the write goes to the queue (js/queue.js),
+     which runs it exactly as the sheet used to, one at a time. The card leaves the
+     list and the next one is ready to review. */
   async function runPush() {
-    if (!sheet || sheet.busy) return;
-    const c = sheet.card;
-    // Several uploads can take a while: ask for 2 minutes of login instead of 1.
-    const uploads = c.kind === "invoice" && c.step === "approved" ? sheet.choices.files.filter(f => !f.file_token).length : 0;
-    if (!ctx.ensureTime(uploads > 1 ? 120000 : 60000)) return;
-    $("#sheetError").hidden = true;
-    setBusy(true);
-    S.working.add(c.id);
-    const s = sheet;
-    await ctx.track(() => push(c, s));    // the session clock waits for a write that's running
-  }
-
-  async function push(c, s) {
-    try {
-      let res, payload, extra = {};
-      if (c.kind === "brief") {
-        payload = universeFromBrief(c, s.choices, RULES);
-        extra = { bd: s.choices.bd.map(u => ({ id: u.id, name: u.name })) };
-        res = await pushBrief(ctx.call, ctx.tables, RULES, c, payload, s.clientToken);
-      } else if (c.kind === "andon") {
-        payload = andonPayload(c, s.choices);
-        res = await pushAndon(ctx.call, ctx.tables, RULES, c, payload, s.clientToken);
-      } else if (c.kind === "par") {
-        res = await pushPar(ctx.call, ctx.tables, RULES, c, s.targetId);
-      } else if (c.kind === "audit") {
-        payload = auditPatch(c, auditRow(c), s.choices, RULES, auditOpts(c));
-        res = await fillGaps(ctx.call, ctx.tables[c.target], c.rowId, payload);
-      } else {
-        const change = collectionsChange(c, s.choices, ctx.collectionOptions(), RULES);
-        if (c.step === "approved") Object.assign(change.fields, await invoiceDetails(s.choices));
-        payload = change.fields;
-        const t = c.targets.find(x => x.id === change.rowId);
-        extra = { action: change.action, rowName: t ? t.row.arName : payload["AR Name"] };
-        res = await pushCollections(ctx.call, ctx.tables, RULES, c, change, s.clientToken);
-      }
-      s.done = true;
-      S.drafts.delete(draftKey(c) + (s.invalid ? ":invalid" : ""));
-      S.working.delete(c.id);
-      setBusy(false);
-      dialog.close();
-      await ctx.afterPush(c, res, payload, extra);
-    } catch (err) {
-      S.working.delete(c.id);
-      setBusy(false);
-      if (err instanceof AlreadyDone) {
-        s.done = true;
-        S.drafts.delete(draftKey(c) + (s.invalid ? ":invalid" : ""));
-        dialog.close();
-        toast(err.message, { type: "info", detail: s.unsure
-          ? "It may have been your earlier try. The list has been refreshed."
-          : err.detail || "Someone else already did this. The list has been refreshed." });
-        ctx.loadData({ quiet: true });
-        return;
-      }
-      if (isDeadToken(err)) { dialog.close(); return; }   // the session already ended (net.js)
-      if (isUncertain(err)) return recheck(c, s, err);
-      // Lark answered with an error, or the failure came before anything was written.
-      const box = $("#sheetError");
-      box.textContent = `Nothing was written. ${describe(err)}`;
-      box.hidden = false;
-    }
-  }
-
-  /* A write that may have landed (it timed out, or the connection dropped after
-     it was sent). Look at Lark before the person can try again: if the card has
-     left the refreshed list, the write is there. */
-  async function recheck(c, s, err) {
-    s.unsure = true;
-    const box = $("#sheetError");
-    box.textContent = describe(err);
-    box.hidden = false;
-    s.busy = true;
-    busy(go, true, "Checking Lark…");
-    cancel.disabled = true;
-    const was = S.loadedAt;
-    await ctx.loadData({ quiet: true });
-    if (sheet !== s) return;                 // the sheet closed meanwhile (the session ended)
-    setBusy(false);
-    if (S.loadedAt === was) return;          // couldn't look: the message above stands
-    const there = S.lists && (S.lists[c.kind] || { cards: [] }).cards.some(x => x.id === c.id && x.step === c.step);
-    if (there) {
-      box.textContent = `${describe(err)} A fresh look at Lark shows it isn't there yet, so it's safe to try again.`;
-      return;
-    }
+    if (!sheet || sheet.busy || sheet.blocked) return;
+    const s = sheet, c = s.card;
+    const job = { choices: s.choices, clientToken: s.clientToken, targetId: s.targetId, invalid: !!s.invalid };
+    const entry = preview(c, job);
     s.done = true;
     S.drafts.delete(draftKey(c) + (s.invalid ? ":invalid" : ""));
+    const el = $(`#cards [data-id="${CSS.escape(c.id)}"]`);
+    const nextId = el && el.nextElementSibling && el.nextElementSibling.dataset.id;
     dialog.close();
-    toast("It's in Lark.", { type: "info", detail: "Polaris didn't hear back at first, but a fresh look shows it's done. The list has been refreshed." });
+    ctx.queue.add(c, job, entry);
+    if (el) await collapse(el);
+    ctx.render();
+    // Keyboard and mouse both land on the next card's main button.
+    const next = nextId && $(`#cards [data-id="${CSS.escape(nextId)}"]`);
+    const nextBtn = next && next.querySelector(".item-actions .btn-tonal:not(:disabled)");
+    if (nextBtn) nextBtn.focus({ preventScroll: true });
   }
+
+  /* What a push writes, for the entry card and the queue list: the table, the row
+     (null for a new one), the cells, and names for the people in them. Computed
+     when Push is pressed; the queue computes the payload again when it runs, from
+     what Lark has then. */
+  function preview(c, job) {
+    const ch = job.choices, names = {};
+    const addPeople = (v) => people(v).forEach(u => { names[u.id] = u.name; });
+    const record = c.record || (c.brief && c.brief.record);
+    if (record) for (const f of ["AM", "MKT", "BD"]) addPeople(record.fields[f]);
+    for (const list of [ch.bd, ch.pm]) (list || []).forEach(u => { names[u.id] = u.name; });
+    if (ch.names instanceof Map) ch.names.forEach((n, id) => { names[id] = n; });
+    const base = { code: c.code || "", name: c.name || "", names };
+    if (c.kind === "brief") return { ...base, verb: "Push to Universe", table: "universe", rowId: null, fields: universeFromBrief(c, ch, RULES) };
+    if (c.kind === "andon") return { ...base, verb: "Add to ANDON", table: "andon", rowId: null, fields: andonPayload(c, ch) };
+    if (c.kind === "par") {
+      const row = c.targets.find(t => t.id === job.targetId) || c.target;
+      return { ...base, verb: `Add PAR ${c.requestNo}`, table: "universe", rowId: row.id,
+               fields: { PAR: parAfterAdding(row.par, c.requestNo) || row.par } };
+    }
+    if (c.kind === "audit") {
+      const fields = auditPatch(c, auditRow(c), ch, RULES, auditOpts(c));
+      const n = Object.keys(fields).length;
+      return { ...base, verb: `Fill ${n} blank${n === 1 ? "" : "s"} in ${AUDIT_WHERE[c.target]}`, table: c.target, rowId: c.rowId, fields };
+    }
+    const change = collectionsChange(c, ch, ctx.collectionOptions(), RULES);
+    const fields = { ...change.fields };
+    if (c.step === "approved") {
+      if (ch.invoiceNo && ch.invoiceNo.trim()) fields["Invoice Number"] = ch.invoiceNo.trim();
+      if (ch.siNo && ch.siNo.trim()) fields["SI Number"] = ch.siNo.trim();
+      if (ch.invoiceDate) fields["Invoice Date"] = ch.invoiceDate;
+      if (ch.files && ch.files.length) fields["Invoice"] = ch.files.map(f => ({ name: f.name }));
+    }
+    return { ...base, verb: verbs(c, change.action, job.invalid)[0], table: "collections",
+             rowId: change.mode === "update" ? change.rowId : null, fields };
+  }
+
+  /* The write itself, for the queue. Resolves { res, payload, extra }; throws
+     the same errors the sheet used to show (AlreadyDone, uncertain, dead token…). */
+  async function perform(c, job, { onStatus = () => {} } = {}) {
+    let res, payload, extra = {};
+    const ch = job.choices;
+    if (c.kind === "brief") {
+      payload = universeFromBrief(c, ch, RULES);
+      extra = { bd: (ch.bd || []).map(u => ({ id: u.id, name: u.name })) };
+      res = await pushBrief(ctx.call, ctx.tables, RULES, c, payload, job.clientToken);
+    } else if (c.kind === "andon") {
+      payload = andonPayload(c, ch);
+      res = await pushAndon(ctx.call, ctx.tables, RULES, c, payload, job.clientToken);
+    } else if (c.kind === "par") {
+      res = await pushPar(ctx.call, ctx.tables, RULES, c, job.targetId);
+    } else if (c.kind === "audit") {
+      payload = auditPatch(c, auditRow(c), ch, RULES, auditOpts(c));
+      const missing = auditMissing(c, payload);
+      if (missing.length) {   // refused here too, not only in the sheet
+        throw Object.assign(new Error("required"), { userMessage: `A won project needs ${missing.join(" and ")}.` });
+      }
+      res = await fillGaps(ctx.call, ctx.tables[c.target], c.rowId, payload);
+    } else {
+      const change = collectionsChange(c, { ...ch, invalid: job.invalid }, ctx.collectionOptions(), RULES);
+      if (c.step === "approved") Object.assign(change.fields, await invoiceDetails(ch, onStatus));
+      payload = change.fields;
+      const t = c.targets.find(x => x.id === change.rowId);
+      extra = { action: change.action, rowName: t ? t.row.arName : payload["AR Name"] };
+      res = await pushCollections(ctx.call, ctx.tables, RULES, c, change, job.clientToken);
+    }
+    return { res, payload, extra };
+  }
+
+  /* Open the sheet again for a queued push (Edit in the queue), with what was chosen. */
+  function reopen(c, job) {
+    S.drafts.set(draftKey(c) + (job.invalid ? ":invalid" : ""),
+                 { choices: job.choices, clientToken: job.clientToken, targetId: job.targetId });
+    openSheet(c, { invalid: job.invalid });
+  }
+
   /* ======================= small inputs ======================= */
 
   /* A text input with suggestions (free text allowed). */
@@ -945,5 +916,5 @@ export function createInbox(ctx) {
     }
   }
 
-  return { render, renderLoader };
+  return { render, renderLoader, perform, preview, reopen, keyOf: draftKey };
 }

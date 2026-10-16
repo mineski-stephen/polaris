@@ -113,7 +113,7 @@ export function createCollections(ctx) {
 
   /* After a push or a save: bring the row into view and let it glow. */
   function land() {
-    if (!(ctx.isSplit() || $("#workspace").dataset.show === "universe")) return;
+    if (!ctx.isSplit()) return;   // the table only shows beside the list, on wide screens
     const tr = $(`#colTable tr[data-id="${C.highlight}"]`);
     if (!tr) return;
     const tbody = tr.closest("tbody");
