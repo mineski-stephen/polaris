@@ -117,7 +117,8 @@ export function createUniverse(ctx) {
     // People by their short display names; the full Lark names on hover.
     const who = (list, label, cls) => cell(cls, list.map(u => u.short).join(", "), label,
                                            list.length ? list.map(u => u.name).join(", ") : null);
-    return h("tr", { class: "urow", "data-id": r.id },
+    // A click (or Enter) opens the record in the row editor.
+    return ctx.openable(h("tr", { class: "urow", "data-id": r.id },
       cell("c-client", r.client),
       cell("c-project", r.project || h("span", { class: "none" }, "(no name)")),
       cell("c-amount num", r.amount !== null ? fmt.peso(r.amount) : ""),
@@ -126,7 +127,7 @@ export function createUniverse(ctx) {
       cell("c-code", r.code ? copyableText(r.code) : ""),
       cell("c-date", dayOnly(r.rfp)),
       h("td", { class: "brk b1", "aria-hidden": "true" }),
-      h("td", { class: "brk b2", "aria-hidden": "true" }));
+      h("td", { class: "brk b2", "aria-hidden": "true" })), "universe", r.id, r.project || r.code);
   }
 
   /* After a push: make sure the row is in view (switching the year if needed),

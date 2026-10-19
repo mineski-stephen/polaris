@@ -9,6 +9,30 @@ or links stop working), add an entry here with the same number and the date,
 and say what changed in the team's words. `npm run check:shell` fails if the
 two numbers differ.
 
+## 1.2.1 · Oct 19, 2026
+
+- **ANDON is sorted by Project Code, Z-A**, so the newest projects are on top
+  (click *Project Code* to flip it to A-Z).
+- **Switch the table beside the list.** Click the table's name (*Universe ▾*) to show
+  Collections, ANDON or the Universe instead, whichever tab you're on. Each tab keeps
+  its pick until you reload; pick the tab's own table to go back.
+
+## 1.2.0 · Oct 19, 2026
+
+- **Search finds everything.** The Universe and Collections searches look through
+  every column of every row (description, PAR, MKT, remarks…), and in the Universe
+  they include Lost, Stalled and Archived projects too. The year you picked still
+  applies. With the search box empty, the tables look just as before.
+- **ANDON has its own table.** On the ANDON tab, ANDON sits beside the cards
+  (newest event first, searchable) instead of the Universe.
+- **Click a row to open it.** Any row in the Universe, Collections or ANDON opens
+  the whole record, every column, ready to change: text, amounts, dates, people,
+  selects, checkboxes, links and files (add or remove). Formulas and lookups are
+  shown but locked. The sheet lists each change you've made (with × to undo it);
+  **Push** sends them to the queue. Before writing, Polaris re-reads the row; if
+  someone changed one of the same cells meanwhile, nothing is written and the
+  queue says which.
+
 ## 1.1.0 · Oct 19, 2026
 
 - The **Audit** tab now checks that every *Fully Closed*, *For Closing*, *For

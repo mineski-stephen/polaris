@@ -7,7 +7,7 @@
    exactly the same push logic. */
 
 import {
-  indexUniverse, indexCollections, verifyWritten, parAfterAdding, clean, fillPlan, invoiceChangedSince,
+  indexUniverse, indexCollections, verifyWritten, parAfterAdding, clean, fillPlan, invoiceChangedSince, editCheck,
 } from "./sync.js";
 import { LARK } from "./config.js";
 import { LarkError } from "./errors.js";
@@ -426,6 +426,38 @@ export async function fillGaps(call, t, recordId, patch) {
   }
   await updateRecord(call, t, recordId, written);
   return { recordId, written, skipped, ...await readBack(call, t, recordId, written) };
+}
+
+/* The row editor: write the cells a person changed (`write`, Lark's write format)
+   to one row of any table. `loaded` is the row as it was when they opened it (read
+   format) and `defs` the table's columns. The row is re-read first: if a cell being
+   changed was changed in Lark meanwhile (to something else), nothing is written; if
+   Lark already holds every value, nothing is written either. Then it writes and
+   reads back. Resolves { recordId, written, record, mismatches, readBackError }. */
+export class EditConflict extends Error {
+  constructor(fields) {
+    // (the queue puts "Nothing was written." in front)
+    super(`${fields.join(", ")} changed in Lark since the row was opened. Edit it to see what Lark has now.`);
+    this.name = "EditConflict";
+    this.fields = fields;
+    this.userMessage = this.message;
+  }
+}
+export async function saveEdit(call, t, recordId, write, loaded, defs) {
+  const now = await findRecord(call, t, recordId);
+  if (!now) throw Object.assign(new Error("gone"), { userMessage: "That row no longer exists in Lark." });
+  const { stale, done } = editCheck(write, defs, loaded, now.fields);
+  if (stale.length) throw new EditConflict(stale);
+  if (done) throw new AlreadyDone("Those changes are already in Lark.");
+  await updateRecord(call, t, recordId, write);
+  let record = null, mismatches = null, readBackError = null;
+  try {
+    record = await getRecord(call, t, recordId);
+    mismatches = verifyWritten(write, record.fields);
+  } catch (e) {
+    readBackError = e;
+  }
+  return { recordId, written: write, record, mismatches, readBackError };
 }
 
 /* Tick (or untick) a source row's IGNORE box, then confirm it stuck. */

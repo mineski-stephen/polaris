@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { RULES } from "../js/config.js";
-import { saveInvoiceDetails, fillGaps, createRecord, AlreadyDone, columnsToRead, schemaSpec } from "../js/ops.js";
+import { saveInvoiceDetails, fillGaps, createRecord, AlreadyDone, columnsToRead, schemaSpec, saveEdit, EditConflict } from "../js/ops.js";
 import { collectionRow } from "../js/sync.js";
 import { LarkError, isUncertain } from "../js/errors.js";
 
@@ -128,6 +128,33 @@ test("schema: the signed CE is an Attachment the Universe reads, and only audit 
   assert.equal(u.optional[CE], 17);
   assert.ok(u.neededBy["audit:universe"].includes(CE));
   assert.ok(!(CE in u.fields), "a missing column mustn't stop brief and PAR pushes");
+});
+
+test("row editor: writes the changes, reads the row back, and returns it", async () => {
+  const defs = [{ field_name: "Project", type: 1 }, { field_name: "Status", type: 3 }, { field_name: "AM", type: 11 }];
+  const row = universeRow({ "Project": seg("Lumen Fest"), "Status": "Signed CE" });
+  const loaded = structuredClone(row.fields);
+  const lark = fakeLark([row]);
+  const res = await saveEdit(lark.call, T.universe, "recU1", { "Project": "Lumen Festival", "Status": null }, loaded, defs);
+  assert.deepEqual(lark.writes().map(w => w.body.records[0].fields), [{ "Project": "Lumen Festival", "Status": null }]);
+  assert.deepEqual(res.mismatches, []);                      // a cleared cell reads back empty
+  assert.equal(res.record.record_id, "recU1");
+});
+
+test("row editor: nothing is written over a cell someone changed meanwhile, or when it's all there already", async () => {
+  const defs = [{ field_name: "Project", type: 1 }, { field_name: "Status", type: 3 }];
+  const row = universeRow({ "Project": seg("Lumen Fest"), "Status": "Signed CE" });
+  const loaded = structuredClone(row.fields);
+  row.fields["Status"] = "Fully Closed";                       // changed in Lark after the row was opened
+  const lark = fakeLark([row]);
+  await assert.rejects(saveEdit(lark.call, T.universe, "recU1", { "Status": "For Closing" }, loaded, defs),
+    (err) => err instanceof EditConflict && err.fields.join() === "Status" && /changed in Lark/.test(err.userMessage));
+  await assert.rejects(saveEdit(lark.call, T.universe, "recU1", { "Status": "Fully Closed" }, loaded, defs), AlreadyDone);
+  assert.equal(lark.writes().length, 0);
+  // a change to another cell doesn't stop this one
+  await saveEdit(lark.call, T.universe, "recU1", { "Project": "Lumen Festival" }, loaded, defs);
+  assert.equal(lark.writes().length, 1);
+  assert.equal(row.fields["Status"], "Fully Closed");
 });
 
 test("a create that Lark accepted but sent no row for is an unknown outcome", async () => {

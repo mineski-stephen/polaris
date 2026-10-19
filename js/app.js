@@ -8,19 +8,21 @@ import {
   indexUniverse, indexCollections, briefCards, parCards, collectionCards, stepStatus, peoplePool, pmPool, auditCards, briefsByCode,
   draftsToJSON, draftsFromJSON,
 } from "./sync.js";
-import { $, $$, h, ic, fillIcons, toast, fmt, store, recall, sleep, initTheme } from "./ui.js";
+import { $, $$, h, ic, fillIcons, toast, fmt, store, recall, sleep, initTheme, openMenu } from "./ui.js";
 import { lark, wake, conn, onConn, describe, isDeadToken, LarkError, proxyHost, unreachable } from "./net.js";
 import { overrides, setLarkUrl, savedLarkUrl, isLocalPage, isServiceUrl } from "./settings.js";
 import * as auth from "./auth.js";
 import { createInbox } from "./inbox.js";
 import { createUniverse } from "./universe.js";
 import { createCollections } from "./collections.js";
+import { createAndon } from "./andon.js";
 import { createQueue } from "./queue.js";
 
 const tables = Object.fromEntries(Object.entries(TABLE_LINKS).map(([k, link]) => [k, parseBaseLink(link)]));
 const KEY = { theme: "polaris.theme", tab: "polaris.tab", draft: "polaris.draft" };
 // What "Clear local data" forgets: views, hidden cards and unsent drafts, never the login or the theme.
-const LOCAL_KEYS = ["polaris.auditHidden", "polaris.uniSort", "polaris.uniCollapsed", "polaris.colSort", "polaris.colCollapsed", KEY.draft];
+const LOCAL_KEYS = ["polaris.auditHidden", "polaris.uniSort", "polaris.uniCollapsed", "polaris.colSort", "polaris.colCollapsed", "polaris.andonCodeSort",
+                    "polaris.andonSort", KEY.draft];   // (andonSort: 1.2.0's, no longer read)
 const LOW_SESSION_MS = 10 * 60 * 1000;
 
 /* What was typed in a push sheet that was cancelled, with its client_token. Kept in
@@ -90,6 +92,8 @@ const TABLES_FOR = {
   invoice: ["invoice", "collections", "universe"], andon: ["brief", "andon"],
   // The audit fills Universe or ANDON cells from the brief: each card checks its own table.
   audit: ["brief", "universe"], "audit:universe": ["brief", "universe"], "audit:andon": ["brief", "andon"],
+  // The row editor writes to the one table the row is in.
+  "edit:universe": ["universe"], "edit:collections": ["collections"], "edit:andon": ["andon"],
 };
 const problemsFor = (kind) => [...(TABLES_FOR[kind] || []).flatMap(t => S.tableProblems[t] || []),
                                 ...(S.kindProblems[kind] || [])];
@@ -124,9 +128,50 @@ const ctx = {
 };
 ctx.token = () => (auth.workToken() || {}).access_token;   // for uploads, which run inside track()
 const inbox = createInbox(ctx);
+/* A table row that opens its record in the row editor: a click anywhere on it (but
+   not on its buttons, links or a text selection), or Enter when it has the focus. */
+ctx.openable = (tr, table, id, label) => {
+  tr.classList.add("is-open");
+  tr.tabIndex = 0;
+  tr.title = `Open ${label || "this row"} to view or change it`;
+  const open = () => inbox.openRecord(table, id);
+  tr.addEventListener("click", (e) => {
+    if (e.target.closest("button, a, input, select, textarea, label")) return;
+    if (String(getSelection() || "").trim()) return;   // selecting text to copy isn't a click
+    open();
+  });
+  tr.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target === tr) { e.preventDefault(); open(); } });
+  return tr;
+};
 const universe = createUniverse(ctx);
 const collections = createCollections(ctx);
+const andon = createAndon(ctx);
 const queue = ctx.queue = createQueue(ctx, inbox);   // Push hands its write to the queue
+
+/* ======================= the pane switcher =======================
+   The title of the table beside the list (▾) opens a menu of the three tables, to
+   look at another one without leaving the tab. Each tab remembers its pick until
+   the page is reloaded; picking the tab's own table again goes back to the default. */
+const SIDES = [["universe", "Universe", "planet"], ["collections", "Collections", "coin"], ["andon", "ANDON", "table"]];
+const sideDefault = (tab) => (tab === "invoice" ? "collections" : tab === "andon" && tables.andon ? "andon" : "universe");
+const sidePick = {};   // tab → table
+const sideOf = (tab) => sidePick[tab] || sideDefault(tab);
+for (const btn of $$(".pane-switch")) {
+  btn.addEventListener("click", () => {
+    const now = sideOf(S.tab), mine = sideDefault(S.tab);
+    openMenu(SIDES.filter(([k]) => tables[k]).map(([k, label, icon]) => ({
+      label: k === mine && k !== now ? `${label} (this tab's)` : label,
+      icon: k === now ? "check" : icon,
+      onSelect: () => {
+        if (k === now) return;
+        if (k === mine) delete sidePick[S.tab]; else sidePick[S.tab] = k;
+        render();
+        const next = $(`.pane-${k === "universe" ? "universe:not(.pane-collections):not(.pane-andon)" : k} .pane-switch`);
+        if (next) next.focus();   // the keyboard stays on the switcher, now in the new pane
+      },
+    })), { anchor: btn, x: btn.getBoundingClientRect().left, y: btn.getBoundingClientRect().bottom + 6 });   // under the title, left-aligned
+  });
+}
 
 /* ======================= routes ======================= */
 const ROUTES = { "": "brief", briefs: "brief", pars: "par", invoices: "invoice", andon: "andon", audit: "audit", universe: "brief", collections: "invoice", settings: "settings", queue: "queue" };
@@ -172,8 +217,9 @@ function render() {
   $("#blockNote").hidden = !conn.blocked;
   if (S.view === "login") renderLogin();
   if (S.view === "work") {
-    // On wide screens the table sits beside the list: Collections beside Invoices, the Universe otherwise.
-    $("#workspace").dataset.side = S.tab === "invoice" ? "collections" : "universe";
+    // On wide screens a table sits beside the list: the tab's own (Collections beside
+    // Invoices, ANDON beside ANDON, the Universe otherwise), or the one picked with the switcher.
+    $("#workspace").dataset.side = sideOf(S.tab);
     for (const t of $$(".tab")) {
       const on = t.dataset.tab === S.tab;
       if (on) t.setAttribute("aria-current", "page"); else t.removeAttribute("aria-current");
@@ -191,6 +237,7 @@ function render() {
     inbox.render();
     universe.render();
     collections.render();
+    andon.render();
   }
   if (S.view === "settings") renderSettings();
   queue.paint();      // the Queue tab, its peek and the queue page
@@ -298,6 +345,7 @@ async function loadData({ quiet = false } = {}) {
       inbox.renderLoader();
       universe.renderLoader();
       collections.renderLoader();
+      andon.renderLoader();
     });
     S.data = res.data;
     S.fields = res.fields;
@@ -358,6 +406,7 @@ function recompute() {
 function afterPush(c, res, payload, extra = {}) {
   const d = S.data;
   if (c.kind === "audit") return afterFill(c, res);
+  if (c.kind === "edit") return afterEdit(c, res, extra);
   if (c.kind === "brief") {
     d.universe.push({ record_id: res.recordId, fields: {
       "Project Code": payload["Project Code"], "Project": payload["Project"], "Client": payload["Client"] || "",
@@ -412,6 +461,25 @@ function afterFill(c, res) {
     return { title, dest: t, warn: true, detail: `Check these in Lark: ${list}. ${skipped}`.trim() };
   }
   return { title, dest: t, warn: false, detail: skipped };
+}
+
+/* After a row edit landed: the row as Lark read it back replaces the one listed
+   (the lists are worked out again, since a change can add or clear a card), and it
+   glows in its table. */
+function afterEdit(c, res, extra = {}) {
+  const rec = (S.data[c.table] || []).find(r => r.record_id === res.recordId);
+  if (rec) rec.fields = res.record ? { ...rec.fields, ...res.record.fields } : Object.assign(rec.fields, res.written);
+  recompute();
+  ({ universe, collections, andon })[c.table].highlight(res.recordId);
+  render();
+  const n = Object.keys(res.written).length;
+  const where = { universe: "the Universe", collections: "Collections", andon: "ANDON" }[c.table];
+  const title = `Changed ${n} field${n === 1 ? "" : "s"} on ${c.name || c.code || "the row"} in ${where}.`;
+  if (res.readBackError) return { title, dest: c.table, warn: true, detail: `Saved, but Polaris couldn't read it back to check it (${describe(res.readBackError)}). Check it in Lark.` };
+  if (res.mismatches.length) {
+    return { title, dest: c.table, warn: true, detail: `Check these in Lark: ${res.mismatches.map(m => `${m.field}: sent “${m.want}”, Lark has “${m.got}”`).join("; ")}` };
+  }
+  return { title, dest: c.table, warn: false, detail: Object.keys(extra.changes || {}).join(", ") };
 }
 
 /* What a Collections push did, in a sentence. */
@@ -505,6 +573,7 @@ function reloadLocal() {
   S.drafts = loadDrafts();
   universe.loadPrefs();
   collections.loadPrefs();
+  andon.loadPrefs();
   if (S.data) recompute();
   render();
 }

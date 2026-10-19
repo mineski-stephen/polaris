@@ -90,9 +90,23 @@ main { padding-bottom: 120px; }
 .uni td.c-date { color: var(--muted); white-space: nowrap; }
 .uni td.brk { display: none; }
 
-/* ---- Collections pane (shown beside the Invoices tab instead of the Universe) ---- */
+/* ---- the pane beside the list: Collections beside Invoices, ANDON beside ANDON, the Universe otherwise ---- */
 .workspace[data-side="collections"] .pane-universe:not(.pane-collections),
-.workspace:not([data-side="collections"]) .pane-collections { display: none; }
+.workspace[data-side="andon"] .pane-universe:not(.pane-andon),
+.workspace:not([data-side="collections"]) .pane-collections,
+.workspace:not([data-side="andon"]) .pane-andon { display: none; }
+/* the title is the switcher: "Universe ▾" opens a menu of the three tables */
+.pane-switch { display: inline-flex; align-items: center; gap: 6px; margin: -4px -8px; padding: 4px 8px; border: 0; border-radius: 10px;
+               background: none; color: inherit; font: inherit; letter-spacing: inherit; cursor: pointer; }
+.pane-switch .i { width: 18px; height: 18px; color: var(--muted); transition: transform .15s var(--ease); }
+.pane-switch:hover { background: var(--surface-2); }
+.pane-switch:hover .i, .pane-switch[aria-expanded="true"] .i { color: var(--brand-text); }
+.pane-switch[aria-expanded="true"] .i { transform: rotate(180deg); }
+.pane-switch:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--focus); }
+/* a row opens its record (js/inbox.js, the row editor) */
+.uni tr.urow.is-open { cursor: pointer; }
+.uni tr.urow.is-open:hover td { background: var(--surface-2); }
+.uni tr.urow.is-open:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
 .uni td.c-status, .uni td.c-cur { white-space: nowrap; color: var(--ink-2); }
 .uni.coll td.c-ar { min-width: 200px; font-weight: 650; color: var(--ink); }
 .uni td.c-ar .sub-line { display: block; font-size: 12px; font-weight: 500; color: var(--muted); }
@@ -202,6 +216,35 @@ main { padding-bottom: 120px; }
 .doc-field.is-change dt { color: var(--brand-text); }
 .doc-field.is-change dd { background: var(--brand-soft); border-color: color-mix(in srgb, var(--brand) 45%, transparent); font-weight: 600; }
 .doc-field del { margin-right: 8px; color: var(--muted); font-weight: 400; }
+/* ---- the row editor: the row, editable, and the list of changes in the sheet ---- */
+.doc-field dd.is-edit { padding: 0; border: 0; background: none; min-height: 0; white-space: normal; overflow: visible; max-height: none; }
+.doc-field dd.is-edit > input, .doc-field dd.is-edit > textarea, .doc-field dd.is-edit .select, .doc-field dd.is-edit .select select { width: 100%; }
+.doc-field dd.is-edit textarea { resize: vertical; }
+.doc-field.is-change dd.is-edit { background: none; font-weight: 400; }
+.doc-field.is-change dd.is-edit :is(input:not([type=checkbox]), textarea, select, .picker-box) {
+  border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
+.doc-field.is-locked dd { color: var(--muted); background: transparent; border-style: dashed; cursor: not-allowed; }
+.doc-tag { margin-left: 6px; padding: 1px 6px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line);
+           font-size: 10px; letter-spacing: .04em; text-transform: none; font-weight: 700; color: var(--muted); }
+.doc-was { margin: 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.edit-check { display: inline-flex; align-items: center; gap: 8px; min-height: 38px; font-size: 14px; cursor: pointer; }
+.edit-files { display: flex; flex-direction: column; gap: 8px; }
+.changes { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.change { display: flex; align-items: stretch; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); }
+.change.is-empty { padding: 14px; color: var(--muted); font-size: 13.5px; border-style: dashed; background: none; }
+.change-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 9px 12px; border: 0; background: none;
+               text-align: left; font: inherit; color: inherit; cursor: pointer; border-radius: 12px 0 0 12px; }
+.change-main:hover b { color: var(--brand-text); }
+.change-main b { font-size: 13px; }
+.change-vals { font-size: 13.5px; overflow-wrap: anywhere; }
+.change-vals del { margin-right: 6px; color: var(--muted); }
+.change-new { font-weight: 650; }
+.change-undo { flex: none; display: grid; place-items: center; width: 40px; border: 0; border-left: 1px solid var(--line); background: none;
+               color: var(--muted); border-radius: 0 12px 12px 0; cursor: pointer; }
+.change-undo:hover { color: var(--danger); }
+.change-undo .i { width: 15px; height: 15px; }
+#sheetDoc .loader, #sheetDoc > .callout { margin: 24px; }
+
 /* No room for two: the row sits under the form's fields, inside the sheet. */
 .pair-doc.is-inline { max-height: none; overflow: visible; padding-top: 16px; background: none; border: 0;
                       border-top: 1px solid var(--line); border-radius: 0; box-shadow: none; }

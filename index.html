@@ -67,7 +67,7 @@
     (function () {
       var v = window.APP_BUILD = Date.now().toString(36);
       var files = ["js/config.js", "js/sync.js", "js/ops.js", "js/icons.js", "js/ui.js", "js/polaris-ui.js", "js/errors.js",
-                   "js/service.js", "js/settings.js", "js/net.js", "js/auth.js", "js/inbox.js", "js/universe.js", "js/collections.js", "js/queue.js", "js/rowdoc.js", "js/app.js"];
+                   "js/service.js", "js/settings.js", "js/net.js", "js/auth.js", "js/inbox.js", "js/universe.js", "js/collections.js", "js/andon.js", "js/queue.js", "js/rowdoc.js", "js/app.js"];
       var map = { imports: {} };
       files.forEach(function (f) { map.imports[new URL(f, location.href).href] = new URL(f + "?v=" + v, location.href).href; });
       document.write('<link rel="stylesheet" href="css/theme.css?v=' + v + '">');
@@ -174,14 +174,15 @@
       <section class="pane pane-universe" aria-labelledby="uniTitle">
         <header class="page-head pane-head">
           <div>
-            <h2 id="uniTitle">Universe</h2>
+            <!-- The title switches the table beside the list (js/app.js, the pane switcher). -->
+            <h2 id="uniTitle"><button type="button" class="pane-switch" aria-haspopup="menu" aria-expanded="false" title="Show another table">Universe<span class="i" data-icon="caret" aria-hidden="true"></span></button></h2>
             <p class="lede sm" id="uniSub"></p>
           </div>
           <div class="page-tools">
             <label class="search search-sm">
               <span class="i" data-icon="search" aria-hidden="true"></span>
               <span class="sr-only">Search the Universe</span>
-              <input type="search" id="uniSearch" placeholder="Search client, project, code, BD, AM…" autocomplete="off" spellcheck="false">
+              <input type="search" id="uniSearch" placeholder="Search every column, every status…" autocomplete="off" spellcheck="false">
             </label>
             <label class="select">
               <span class="sr-only">Year</span>
@@ -203,14 +204,14 @@
       <section class="pane pane-universe pane-collections" aria-labelledby="colTitle">
         <header class="page-head pane-head">
           <div>
-            <h2 id="colTitle">Collections</h2>
+            <h2 id="colTitle"><button type="button" class="pane-switch" aria-haspopup="menu" aria-expanded="false" title="Show another table">Collections<span class="i" data-icon="caret" aria-hidden="true"></span></button></h2>
             <p class="lede sm" id="colSub"></p>
           </div>
           <div class="page-tools">
             <label class="search search-sm">
               <span class="i" data-icon="search" aria-hidden="true"></span>
               <span class="sr-only">Search Collections</span>
-              <input type="search" id="colSearch" placeholder="Search AR name, code, invoice no.…" autocomplete="off" spellcheck="false">
+              <input type="search" id="colSearch" placeholder="Search every column…" autocomplete="off" spellcheck="false">
             </label>
             <a class="icon-btn" id="colOpen" target="_blank" rel="noopener" aria-label="Open Collections in Lark" title="Open in Lark">
               <span class="i" data-icon="external" aria-hidden="true"></span>
@@ -221,6 +222,30 @@
           <table class="tbl uni coll" id="colTable"></table>
           <div class="loader" id="colLoader" hidden></div>
           <div class="empty small" id="colEmpty" hidden></div>
+        </div>
+      </section>
+
+      <section class="pane pane-universe pane-andon" aria-labelledby="andonTitle">
+        <header class="page-head pane-head">
+          <div>
+            <h2 id="andonTitle"><button type="button" class="pane-switch" aria-haspopup="menu" aria-expanded="false" title="Show another table">ANDON<span class="i" data-icon="caret" aria-hidden="true"></span></button></h2>
+            <p class="lede sm" id="andonSub"></p>
+          </div>
+          <div class="page-tools">
+            <label class="search search-sm">
+              <span class="i" data-icon="search" aria-hidden="true"></span>
+              <span class="sr-only">Search ANDON</span>
+              <input type="search" id="andonSearch" placeholder="Search every column…" autocomplete="off" spellcheck="false">
+            </label>
+            <a class="icon-btn" id="andonOpen" target="_blank" rel="noopener" aria-label="Open ANDON in Lark" title="Open in Lark">
+              <span class="i" data-icon="external" aria-hidden="true"></span>
+            </a>
+          </div>
+        </header>
+        <div class="tbl-wrap uni-wrap">
+          <table class="tbl uni andon" id="andonTable"></table>
+          <div class="loader" id="andonLoader" hidden></div>
+          <div class="empty small" id="andonEmpty" hidden></div>
         </div>
       </section>
     </section>

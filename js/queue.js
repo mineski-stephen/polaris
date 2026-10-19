@@ -22,6 +22,7 @@ const PEEK_MAX = 5;
 const MIN_LOGIN_MS = 60000;           // the same minute every write needs (ensureTime)
 const WHERE = { universe: "Universe", collections: "Collections", andon: "ANDON" };
 const ROUTE = { brief: "#/briefs", par: "#/pars", invoice: "#/invoices", andon: "#/andon", audit: "#/audit" };
+const EDIT_ROUTE = { universe: "#/briefs", collections: "#/invoices", andon: "#/andon" };   // the tab its table sits beside
 const LISTED = ["running", "checking", "waiting"];
 
 export function createQueue(ctx, inbox) {
@@ -35,8 +36,9 @@ export function createQueue(ctx, inbox) {
   const active = () => Q.items.filter(it => it.state !== "done");
   const waiting = () => Q.items.filter(it => LISTED.includes(it.state));
   const failed = () => Q.items.filter(it => it.state === "failed");
-  const findCard = (it) => ((S.lists && S.lists[it.kind]) || { cards: [] }).cards
-    .find(c => c.id === it.cardId && (c.step || "") === (it.step || ""));
+  // A row edit isn't in a list: its "card" is the row, as long as the table still has it.
+  const findCard = (it) => (it.kind === "edit" ? inbox.editCard(it.cardId)
+    : ((S.lists && S.lists[it.kind]) || { cards: [] }).cards.find(c => c.id === it.cardId && (c.step || "") === (it.step || "")));
 
   /* ---------------------------------------------------------------- adding */
   function add(c, job, entry) {
@@ -115,6 +117,10 @@ export function createQueue(ctx, inbox) {
     Q.running = null;
     if (S.loadedAt === was) {
       fail(it, "Polaris couldn't confirm it. Check it in Lark before retrying.");
+    } else if (it.kind === "edit") {
+      // An edited row stays in its table either way, so the list can't tell. A retry
+      // is safe: it re-reads the row first and writes nothing if the changes are there.
+      fail(it, "Polaris couldn't confirm it. Retry checks the row first, and won't write if it's already changed.");
     } else if (findCard(it)) {
       fail(it, "It didn't reach Lark. It's safe to retry.");
     } else {
@@ -185,7 +191,8 @@ export function createQueue(ctx, inbox) {
     save();
     attention();
     ctx.render();
-    toast(`Took ${it.code || "it"} out of the queue.`, { detail: c ? "It's back in its list. Nothing was written." : "Nothing was written." });
+    toast(`Took ${it.code || it.name || "it"} out of the queue.`, { detail: it.kind === "edit"
+      ? "Nothing was written. Open the row again to see your changes." : c ? "It's back in its list. Nothing was written." : "Nothing was written." });
   }
   function retry(it) {
     if (it.state !== "failed") return;
@@ -202,7 +209,7 @@ export function createQueue(ctx, inbox) {
     Q.items = Q.items.filter(x => x !== it);
     save();
     attention();
-    location.hash = ROUTE[it.kind] || "#/briefs";
+    location.hash = (it.kind === "edit" ? EDIT_ROUTE[it.table] : ROUTE[it.kind]) || "#/briefs";
     setTimeout(() => inbox.reopen(c, it.job), 0);
   }
   function clearDone() {

@@ -679,22 +679,36 @@ export function universeRow(r) {
   };
 }
 
+/* Everything a row says, as lower-case text for search: every cell (people by
+   name, files by name, lookups by value), whether or not the table shows it. */
+export function recordText(fields) {
+  return Object.values(fields || {}).map(v => plain(v)).filter(Boolean).join(" \u2002").toLowerCase();
+}
+
+/* Does a search match this record? Every word of the query must be somewhere in
+   the row ("tegami 2026" finds a row that says both, in any columns). */
+export function matchesQuery(fields, query) {
+  const words = String(query || "").toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return true;
+  const text = recordText(fields);
+  return words.every(w => text.includes(w));
+}
+
 /* The Universe the way the team reads it: one Year (or "all"), statuses in
    `hidden` left out, grouped by Status in the column's option order, each group
-   sorted by RFP Received Date (rows without one go last). `query` narrows rows
-   by client, project, code or people. */
+   sorted by RFP Received Date (rows without one go last). `query` searches every
+   column of every row of that year, the hidden statuses included: a search is
+   for finding a project, wherever it is. */
 export function universeView(records, { year = "all", hidden = [], statusOrder = [], sort = "desc", query = "" } = {}) {
-  const all = records.map(universeRow);
-  const years = [...new Set(all.map(r => r.year).filter(y => /^\d{4}$/.test(y)))].sort().reverse();
-  const q = query.trim().toLowerCase();
-  const text = (r) => [r.client, r.project, r.code, ...r.bd.map(u => u.name), ...r.am.map(u => u.name)]
-    .join(" ").toLowerCase();
-  const picked = all.filter(r => (year === "all" || r.year === String(year)) && (!q || text(r).includes(q)));
+  const all = records.map(r => [universeRow(r), r.fields]);
+  const years = [...new Set(all.map(([r]) => r.year).filter(y => /^\d{4}$/.test(y)))].sort().reverse();
+  const q = query.trim();
+  const picked = all.filter(([r, f]) => (year === "all" || r.year === String(year)) && (!q || matchesQuery(f, q))).map(([r]) => r);
 
   const hiddenCounts = {};
   const byStatus = new Map();
   for (const r of picked) {
-    if (hidden.includes(r.status)) { hiddenCounts[r.status] = (hiddenCounts[r.status] || 0) + 1; continue; }
+    if (!q && hidden.includes(r.status)) { hiddenCounts[r.status] = (hiddenCounts[r.status] || 0) + 1; continue; }
     if (!byStatus.has(r.status)) byStatus.set(r.status, []);
     byStatus.get(r.status).push(r);
   }
@@ -710,6 +724,35 @@ export function universeView(records, { year = "all", hidden = [], statusOrder =
   const shown = groups.reduce((n, g) => n + g.rows.length, 0);
   return { groups, years, hiddenCounts, count: shown,
            amount: round2(groups.reduce((s, g) => s + g.amount, 0)) };
+}
+
+/* ======================= the ANDON view ======================= */
+
+/* One ANDON record as a table row. */
+export function andonRow(r) {
+  const f = r.fields || {};
+  return {
+    id: r.record_id,
+    project: clean(f["Project"]),
+    code: clean(f["Project Code"]),
+    am: people(f["AM"]),
+    pm: people(f["PM (LEAD)"]),
+    tribe: clean(f["TRIBE"]),
+    unit: clean(f["Business Unit"]),
+    start: num(f["Event Start"]),
+    end: num(f["Event End"]),
+  };
+}
+
+/* ANDON sorted by Project Code, Z-A by default: codes start with the year and run
+   up (2026TEG-P0127), so the newest projects come first. Numbers compare as numbers
+   (P0999 before P1000); rows without a code go last. `query` searches every column. */
+export function andonView(records, { sort = "desc", query = "" } = {}) {
+  const dir = sort === "asc" ? 1 : -1;
+  const rows = records.filter(r => matchesQuery(r.fields, query)).map(andonRow)
+    .sort((a, b) => (!a.code) - (!b.code) || dir * a.code.localeCompare(b.code, "en", { numeric: true, sensitivity: "base" })
+                    || a.project.localeCompare(b.project));
+  return { rows, count: rows.length };
 }
 
 /* The Universe PAR cell after adding a request number, or null if it's already there. */
@@ -994,6 +1037,7 @@ function sameValue(want, got) {
       .map(x => (typeof x === "string" ? x : plain(x))).filter(Boolean).sort().join("\n");
     return names(want) === names(got);
   }
+  if (isObj(want) && !Array.isArray(want) && "link" in want) return isObj(got) && got.link === want.link;   // URL
   if (Array.isArray(want) && want.every(x => isObj(x) && "file_token" in x)) {   // attachments: compare tokens
     const toks = (a) => (Array.isArray(a) ? a : []).map(x => isObj(x) && x.file_token).filter(Boolean).sort().join(",");
     return toks(want) === toks(got);
@@ -1049,11 +1093,9 @@ export function compareInvoiceNo(a, b, dir = 1) {
 }
 
 /* Collections grouped by Status (in the column's option order), each group sorted
-   by Invoice Number. `query` narrows by AR name, code, request, invoice or AM. */
+   by Invoice Number. `query` searches every column (see matchesQuery). */
 export function collectionsView(records, { statusOrder = [], sort = "desc", query = "" } = {}) {
-  const q = query.trim().toLowerCase();
-  const rows = records.map(collectionRow).filter(r => !q ||
-    [r.arName, r.code, r.request, r.invoiceNo, r.siNo, r.remarks, ...r.am.map(u => u.name)].join(" ").toLowerCase().includes(q));
+  const rows = records.filter(r => matchesQuery(r.fields, query)).map(collectionRow);
   const byStatus = new Map();
   for (const r of rows) {
     if (!byStatus.has(r.status)) byStatus.set(r.status, []);
@@ -1092,6 +1134,114 @@ export function invoiceChangedSince(patch, loaded, nowRecord) {
   if ("Invoice Date" in patch && (now.invoiceDate || null) !== (loaded.invoiceDate || null)) out.push("Invoice Date");
   if ("Invoice" in patch && tokens(now.files) !== tokens(loaded.files)) out.push("Invoice");
   return out;
+}
+
+/* ======================= the row editor: any cell of a row, changed by hand =======================
+
+   A row opened from the Universe, Collections or ANDON table can have any typed
+   cell changed. What Lark computes (formulas, lookups, links, auto fields) and
+   types the page can't write are shown but not editable. Values are kept in Lark's
+   write format; an attachment is the list of files it will hold ({file_token,
+   name, size}; a file picked but not uploaded yet has no token). */
+
+const EDIT_TYPES = new Set([1, 2, 3, 4, 5, 7, 11, 15, 17]);
+export const canEditField = (def) => !!def && EDIT_TYPES.has(def.type);
+
+/* A cell as Lark reads it → the value the editor holds (write format; null = empty). */
+export function writeValueOf(def, v) {
+  const type = def ? def.type : 1;
+  if (type === 1 || type === 3) return clean(v) || null;
+  if (type === 2) return numOf(v);
+  if (type === 4) {
+    const list = (Array.isArray(v) ? v : []).map(x => (typeof x === "string" ? x : plain(x))).filter(Boolean);
+    return list.length ? list : null;
+  }
+  if (type === 5) return num(v);
+  if (type === 7) return v === true;
+  if (type === 11) { const ids = people(v).map(u => ({ id: u.id })); return ids.length ? ids : null; }
+  if (type === 15) {
+    if (!v) return null;
+    const link = typeof v === "object" ? String(v.link || "") : String(v);
+    return link ? { link, text: (typeof v === "object" && v.text) || link } : null;
+  }
+  if (type === 17) {
+    const files = (Array.isArray(v) ? v : []).filter(f => f && (f.file_token || f.name))
+      .map(f => ({ file_token: f.file_token, name: f.name || "file", size: f.size || 0 }));
+    return files.length ? files : null;
+  }
+  return v === undefined ? null : v;
+}
+
+/* One string per value, so two values compare equal when Lark would hold the same
+   thing (people by id, files by token, multi-select in any order). */
+export function editKey(w) {
+  if (w === null || w === undefined) return "";
+  if (Array.isArray(w)) {
+    return w.map(x => (typeof x === "string" ? x : x.id || x.file_token || `new:${x.name}`)).sort().join("\u0001");
+  }
+  if (typeof w === "object") return "link" in w ? `${w.link}\u0001${w.text || ""}` : JSON.stringify(w);
+  if (typeof w === "string") return w.replace(/\r\n?/g, "\n").trim();
+  return String(w);
+}
+
+/* The cells the editor changes: `choices.edits` ({field: value}, an attachment's
+   value being the files it keeps) plus `choices.files` (new files, [{field, name,
+   size, file_token?}]), compared with the row as it was opened (`loaded`, read
+   format). Only real changes are returned, in the editor's format. */
+export function editChanges(defs, loaded, choices) {
+  const byName = new Map((defs || []).map(d => [d.field_name, d]));
+  const edits = choices.edits || {}, fresh = choices.files || [];
+  const out = {};
+  for (const k of new Set([...Object.keys(edits), ...fresh.map(f => f.field)])) {
+    const def = byName.get(k);
+    if (!canEditField(def)) continue;
+    const was = writeValueOf(def, (loaded || {})[k]);
+    let v = k in edits ? edits[k] : was;
+    if (def.type === 17) {
+      const add = fresh.filter(f => f.field === k).map(f => ({ file_token: f.file_token, name: f.name, size: f.size || 0 }));
+      v = [...(v || []), ...add];
+      if (!v.length) v = null;
+    }
+    if (typeof v === "string") v = v.replace(/\r\n?/g, "\n").trim() || null;
+    if (Array.isArray(v) && !v.length) v = null;
+    if (editKey(v) !== editKey(was)) out[k] = v;
+  }
+  return out;
+}
+
+/* The changes as Lark takes them: attachments by file_token only (every file must
+   have uploaded by now). */
+export function editWrite(changes, defs) {
+  const byName = new Map((defs || []).map(d => [d.field_name, d]));
+  const out = {};
+  for (const [k, v] of Object.entries(changes)) {
+    const def = byName.get(k);
+    if (def && def.type === 17 && Array.isArray(v)) {
+      const missing = v.find(f => !f.file_token);
+      if (missing) throw Object.assign(new Error("not uploaded"), { userMessage: `“${missing.name}” hasn't uploaded. Try again.` });
+      out[k] = v.map(f => ({ file_token: f.file_token }));
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+/* Before writing: compare the row as it was opened (`loaded`) with the row as Lark
+   has it now. `stale` = cells being changed that someone else changed meanwhile (to
+   something other than what this edit writes): nothing may be written. `done` =
+   true when Lark already holds every value this edit writes. */
+export function editCheck(write, defs, loaded, now) {
+  const byName = new Map((defs || []).map(d => [d.field_name, d]));
+  const stale = [];
+  let same = 0;
+  for (const [k, v] of Object.entries(write)) {
+    const def = byName.get(k);
+    const before = editKey(writeValueOf(def, (loaded || {})[k])), after = editKey(writeValueOf(def, (now || {})[k]));
+    if (after === editKey(v)) { same++; continue; }
+    if (after !== before) stale.push(k);
+  }
+  return { stale, done: same === Object.keys(write).length };
 }
 
 /* ======================= drafts (kept across a reload) ======================= */

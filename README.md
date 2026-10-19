@@ -29,6 +29,8 @@ phone and on a PC, and every change is made as you, with your own Lark login.
 - [What gets written](#what-gets-written)
 - [The audit](#the-audit)
 - [The Universe view](#the-universe-view)
+- [The ANDON view](#the-andon-view)
+- [The row editor](#the-row-editor)
 - [The Collections view](#the-collections-view)
 - [Settings](#settings)
 - [How it's built](#how-its-built)
@@ -77,7 +79,11 @@ phone and on a PC, and every change is made as you, with your own Lark login.
 4. **Ignore** hides a card by ticking the source row's IGNORE box. **Undo** in the
    message brings it back.
 5. On a wide screen (1280 px and up) the **Universe** table sits beside the cards
-   (**Collections** beside Invoices). Narrower screens show the cards only.
+   (**Collections** beside Invoices, **ANDON** beside ANDON). Narrower screens show
+   the cards only. Click any row to open and change it ([the row editor](#the-row-editor)).
+   To look at another table without leaving the tab, click the table's name
+   (**Universe ▾**) and pick Universe, Collections or ANDON. Each tab keeps its pick
+   until the page is reloaded; picking the tab's own table goes back to it.
 6. **Settings** (the gear next to **Queue** in the top bar): see [Settings](#settings).
 
 ---
@@ -321,6 +327,54 @@ years*), **Lost, Stalled and Archived hidden**, sorted by **RFP Received Date**
 Shown beside the cards on wide screens only. Pushed rows appear as they land; the
 table re-reads Lark (formulas, other people's edits) when you press **Refresh**.
 
+**Search** looks through every column of every row (Project Description, PAR, MKT,
+PM, Status… not only the ones the table shows), and includes the Lost, Stalled and
+Archived projects the default view hides. Every word you type must appear somewhere
+in the row (*lumen hybrid*). The **Year** still applies (pick *All years* to search
+them all). Clear the box and the default view is back. The Collections and ANDON
+searches work the same way.
+
+---
+
+## The ANDON view
+
+On the **ANDON** tab, the right-hand pane shows **ANDON** (wide screens only): every
+row, sorted by **Project Code, Z-A** (codes start with the year and count up, so the
+newest projects are on top; numbers compare as numbers, so P1000 is above P0999;
+click the column to flip it to A-Z).
+Columns: Project, Project Code, AM, PM (LEAD), TRIBE, Event Start.
+
+---
+
+## The row editor
+
+**Click any row** in the Universe, Collections or ANDON table (or press Enter on it)
+to open the whole record. The row on the right is read fresh from Lark, with every
+column (not only the ones the table shows), and every typed one can be changed:
+
+| Column type | Editor |
+| ----------- | ------ |
+| Text | a box (a bigger one for descriptions and remarks) |
+| Number | a box; *1,250,000* and *₱1,250,000* work, anything else is outlined in red and blocks the push |
+| Single / multi select | the column's own options (no new options are made) |
+| Date | the date field (see *Dates* below); it sets the day, at midnight Manila |
+| Person | pick from everyone Polaris knows (the row's own people first) |
+| Checkbox, URL | a tick box, an address |
+| Attachment | the files it has (× takes one out) and **Add files** (up to 10 MB each) |
+
+What Lark works out itself (**Formula**, **Lookup**, links, created/modified, auto
+numbers) is shown with a tag and can't be changed. Clearing a cell empties it in Lark.
+
+The sheet on the left lists **each change** (what it was, struck through, and what it
+becomes). Click one to jump to its field; **×** puts it back as Lark has it. Changed
+fields are outlined in the row, with *Was: …* under them. **Push N changes** sends
+them to the [queue](#the-push-queue), like any push: new files upload first, then the
+row is **re-read**. If someone changed one of the same cells in Lark since you opened
+it, nothing is written and the queue says which (**Edit** opens the row again, fresh,
+with your changes). If Lark already has every value, nothing is written either. Then
+it writes only the changed cells and reads them back. Cancel keeps your changes for
+next time (files aren't kept). Pushing needs edit access to that table.
+
 ---
 
 ## The Collections view
@@ -371,7 +425,7 @@ What Polaris keeps in this browser (every key starts with `polaris.`, all values
 | `settings` | this browser | `{ "larkUrl": … }`, the saved connection service address (used on a local page only) |
 | `draft` | this browser | what you typed in a push sheet you cancelled, with its retry token, for up to 7 days. Files aren't kept. |
 | `queue` | this browser | pushes waiting in the queue (or that didn't go through): what each writes, with its retry token, for up to 2 days. Finished pushes and files that hadn't uploaded aren't kept. Not cleared by **Clear local data**: use **Remove** on the queue page. |
-| `auditHidden`, `uniSort`, `uniCollapsed`, `colSort`, `colCollapsed` | this browser | hidden audit cards, sort order, folded groups |
+| `auditHidden`, `uniSort`, `uniCollapsed`, `colSort`, `colCollapsed`, `andonCodeSort` | this browser | hidden audit cards, sort order, folded groups |
 | `auth.token`, `auth.pending`, `auth.user` | this tab | your login, a login in progress, your name and picture. Gone when the tab closes. |
 | `override.lark` | this tab | the `?lark=` link override |
 
@@ -394,7 +448,7 @@ Polaris doesn't keep a copy of the tables: every load reads them fresh from Lark
 | ----- | ----- |
 | Page shell: state, routes, header, Settings | `index.html`, `js/app.js` |
 | Cards, push sheet, Ignore / Undo | `js/inbox.js` |
-| Universe and Collections tables | `js/universe.js`, `js/collections.js` |
+| Universe, Collections and ANDON tables | `js/universe.js`, `js/collections.js`, `js/andon.js` |
 | Transfer rules (pure: no DOM, no network) | `js/sync.js` |
 | Every Lark read and write (takes an injected `call`) | `js/ops.js` |
 | Talking to the proxy: waking, retries, timeouts, uploads | `js/net.js` |
@@ -586,6 +640,9 @@ the live tables.
 - **Lark API formats.** Read-backs use `records/batch_get` (the single-record GET
   returns numbers as text). Text columns only accept plain text; Lark still shows
   URLs in them as clickable links.
+- **The row editor and times.** A date changed in the row editor is a day (midnight
+  Manila); a date column that also holds a time loses it when changed. Phone,
+  location and other uncommon column types are shown but can't be changed.
 - **Narrow screens show the cards only.** Below 1280 px there's no Universe or
   Collections table, so a Collections row's invoice details (number, SI, date, file)
   can be added only from the push sheet of an approved request, or on a wider screen.
@@ -630,6 +687,7 @@ the live tables.
 | *Add this project's PAR to the Universe first.* | Use **Go to the PAR** (if it's listed), push it, then the invoice can go. |
 | *"…" changed since the list was loaded.* | Someone updated that Collections row meanwhile. Nothing was written; the list refreshed, so check the card again. The same message appears for invoice details: the cells you changed were changed in Lark first. |
 | *A won project needs Sign Date and Month.* (Fill) | Type the missing one(s) in; the Fill stays off until both have a value. |
+| *Nothing was written. Status changed in Lark since the row was opened.* (queue, a row edit) | Someone changed the same cell meanwhile. **Edit** opens the row fresh from Lark with your changes; check it and push again (or **Remove**). |
 | *Add the file for Signed CE (PDF)…* (Fill) | Use **Add the signed CE** to pick the PDF, or untick **Signed CE (PDF)** to fill the card's other blanks without it. |
 | *"…" is over 10 MB* (Fill) | Compress the PDF (or split it into parts and add each one), then add it again. |
 | *Someone had already filled …, so those were left as they were.* (after Fill) | The audit only fills blank cells; those weren't blank any more. |
@@ -704,6 +762,7 @@ design language first, copy them over unedited, then `npm run check:shell` confi
 | `js/queue.js` | The push queue: runs pushes one at a time, re-checks uncertain ones, keeps waiting ones in this browser; the Queue tab, its hover list and the queue page. |
 | `js/rowdoc.js` | The row beside the push sheet: the Lark row as the push will leave it, changes highlighted. |
 | `js/universe.js` | The Universe table. |
+| `js/andon.js` | The ANDON table. |
 | `js/collections.js` | The Collections table and its invoice details sheet. |
 | `js/icons.js`, `js/ui.js` | The shared Mineski icons and UI helpers: unedited copies of `design-ref/mineski-design-language/assets/`. Change them there, then copy them over. |
 | `js/polaris-ui.js` | Polaris-only helpers on top of `ui.js`: Lark date-only days, the date field, copyable request numbers and project codes in a sentence. |

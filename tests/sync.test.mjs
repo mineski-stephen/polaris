@@ -11,6 +11,7 @@ import {
   peoplePool, universeView, shortName, andonFromBrief, collectionsView, collectionRow, invoiceDetailsPatch,
   auditCards, auditPatch, parseDay, fillPlan, invoiceChangedSince, draftsToJSON, draftsFromJSON, queueToJSON, queueFromJSON, cellText, isWonProject, auditMissing, monthOf,
   needsSignedCe, auditFilesMissing, isBlank,
+  matchesQuery, andonView, canEditField, editChanges, editWrite, editCheck, editKey, writeValueOf,
 } from "../js/sync.js";
 import { writableOnly } from "../js/ops.js";
 
@@ -864,4 +865,90 @@ test("audit: the signed CE is written as the uploaded files' tokens, and needs a
     table: "universe", job: { clientToken: "t", choices: { fields: card.gaps, files: [{ name: "CE.pdf", size: 1, file: {} }] } } }]);
   assert.equal(q.items[0].lostFiles, true);
   assert.deepEqual(q.items[0].job.choices.files, [{ name: "CE.pdf", size: 1 }]);
+});
+
+/* ---------- search: every column, every status ---------- */
+
+test("search: the Universe finds a project in any column and any status; the default view is unchanged", () => {
+  const rows = [
+    rec("a", { "Project": seg("Lumen Fest"), "Status": "Lost", "Year": seg("2026"), "PAR": seg("202607030034"),
+               "Project Description": seg("Hybrid stage, LED wall") }),
+    rec("b", { "Project": seg("Harbor Run"), "Status": "Signed CE", "Year": seg("2026"), "MKT": [user("ou_m", "Mika Market")] }),
+    rec("c", { "Project": seg("Old Lumen"), "Status": "Lost", "Year": seg("2025") }),
+  ];
+  const opts = { year: "2026", hidden: ["Lost"], statusOrder: [] };
+  // nothing typed: Lost stays hidden, as before
+  const plain = universeView(rows, opts);
+  assert.equal(plain.count, 1);
+  assert.deepEqual(plain.hiddenCounts, { Lost: 1 });
+  // a search looks everywhere: a hidden status, the PAR, the description, a person in any column
+  assert.deepEqual(universeView(rows, { ...opts, query: "lumen" }).groups.flatMap(g => g.rows.map(r => r.id)), ["a"]);   // the year still applies
+  assert.equal(universeView(rows, { ...opts, query: "202607030034" }).count, 1);
+  assert.equal(universeView(rows, { ...opts, query: "led wall" }).count, 1);
+  assert.equal(universeView(rows, { ...opts, query: "mika" }).count, 1);
+  assert.equal(universeView(rows, { ...opts, year: "all", query: "lumen" }).count, 2);
+  assert.ok(matchesQuery(rows[0].fields, "fest hybrid"));                  // every word, in any column
+  assert.ok(!matchesQuery(rows[0].fields, "fest harbor"));
+});
+
+test("search: Collections and ANDON search every column too", () => {
+  const coll = [rec("c1", { "AR Name": seg("Tranche 1"), "Sales Remarks": seg("waiting on PO 7781"), "Status": "For Collection" }),
+                rec("c2", { "AR Name": seg("Tranche 2"), "Status": "For Invoicing" })];
+  assert.deepEqual(collectionsView(coll, { query: "7781" }).groups.flatMap(g => g.rows.map(r => r.id)), ["c1"]);
+  const andon = [rec("n1", { "Project": seg("Expo"), "Project Code": seg("2025TEG-P0999"), "TRIBE": "Tribe A" }),
+                 rec("n2", { "Project": seg("Summit"), "Project Code": seg("2026TEG-P0127"), "TRIBE": "Tribe B" }),
+                 rec("n3", { "Project": seg("No code") }),
+                 rec("n4", { "Project": seg("Big Fest"), "Project Code": seg("2025TEG-P1000"), "TRIBE": "Tribe A" })];
+  // Project Code Z-A: this year's first, and P1000 above P0999 (numbers as numbers); no code last
+  assert.deepEqual(andonView(andon).rows.map(r => r.id), ["n2", "n4", "n1", "n3"]);
+  assert.deepEqual(andonView(andon, { sort: "asc" }).rows.map(r => r.id), ["n1", "n4", "n2", "n3"]);
+  assert.deepEqual(andonView(andon, { query: "tribe b" }).rows.map(r => r.id), ["n2", "n4", "n1"]);   // "b" is in "tribe": every word, anywhere
+  assert.deepEqual(andonView(andon, { query: "summit tribe" }).rows.map(r => r.id), ["n2"]);
+});
+
+/* ---------- the row editor ---------- */
+
+const EDIT_DEFS = [
+  { field_name: "Project", type: 1 }, { field_name: "Amount", type: 2 }, { field_name: "Status", type: 3 },
+  { field_name: "Tools", type: 4 }, { field_name: "Start", type: 5 }, { field_name: "Done", type: 7 },
+  { field_name: "AM", type: 11 }, { field_name: "Link", type: 15 }, { field_name: "Files", type: 17 },
+  { field_name: "Total", type: 20 }, { field_name: "Brief", type: 19 },
+];
+const LOADED = {
+  "Project": seg("Lumen Fest"), "Amount": 1000, "Status": "Signed CE", "Tools": ["LED Wall", "Sound"],
+  "Start": 1790000000000, "AM": [user("ou_a", "Ana")], "Link": { link: "https://x.test/a", text: "a" },
+  "Files": [{ file_token: "boxA", name: "CE.pdf", size: 10 }], "Total": { type: 2, value: [1120] }, "Brief": { type: 1, value: ["x"] },
+};
+
+test("row editor: only real changes count; formulas and lookups never do", () => {
+  const def = (n) => EDIT_DEFS.find(d => d.field_name === n);
+  for (const n of ["Project", "Amount", "Status", "Tools", "Start", "Done", "AM", "Link", "Files"]) assert.ok(canEditField(def(n)), n);
+  assert.ok(!canEditField(def("Total")) && !canEditField(def("Brief")));
+  // values put back as they were, re-ordered, or re-typed with spaces aren't changes
+  const same = { "Project": "  Lumen Fest ", "Amount": 1000, "Tools": ["Sound", "LED Wall"], "AM": [{ id: "ou_a" }], "Done": false,
+                 "Files": [{ file_token: "boxA", name: "CE.pdf" }], "Total": 5, "Brief": "y" };
+  assert.deepEqual(editChanges(EDIT_DEFS, LOADED, { edits: same, files: [] }), {});
+  // real changes, in write format; a cleared cell is null
+  const ch = editChanges(EDIT_DEFS, LOADED, { edits: { "Project": "Lumen Festival", "Status": null, "AM": [{ id: "ou_b" }], "Done": true,
+    "Files": [] }, files: [{ field: "Files", name: "new.pdf", size: 5 }] });
+  assert.deepEqual(Object.keys(ch).sort(), ["AM", "Done", "Files", "Project", "Status"]);
+  assert.equal(ch["Status"], null);
+  assert.deepEqual(ch["Files"], [{ file_token: undefined, name: "new.pdf", size: 5 }]);   // the old file removed, a new one added
+  // the write: files by token only, and never before they've uploaded
+  assert.throws(() => editWrite(ch, EDIT_DEFS), (e) => /new\.pdf/.test(e.userMessage));
+  ch["Files"][0].file_token = "boxN";
+  assert.deepEqual(editWrite(ch, EDIT_DEFS)["Files"], [{ file_token: "boxN" }]);
+  assert.equal(editKey(writeValueOf(def("Link"), LOADED["Link"])), editKey({ link: "https://x.test/a", text: "a" }));
+});
+
+test("row editor: a cell someone else changed meanwhile stops the write; one already as wanted is fine", () => {
+  const write = { "Project": "Lumen Festival", "Amount": 2000 };
+  assert.deepEqual(editCheck(write, EDIT_DEFS, LOADED, LOADED), { stale: [], done: false });
+  // someone changed Amount in Lark after the row was opened
+  assert.deepEqual(editCheck(write, EDIT_DEFS, LOADED, { ...LOADED, "Amount": 1500 }).stale, ["Amount"]);
+  // a cell this edit doesn't touch changing is nobody's business
+  assert.deepEqual(editCheck(write, EDIT_DEFS, LOADED, { ...LOADED, "Status": "Fully Closed" }).stale, []);
+  // someone made the same change: not a conflict; all of it there already: done
+  assert.deepEqual(editCheck(write, EDIT_DEFS, LOADED, { ...LOADED, "Amount": 2000 }), { stale: [], done: false });
+  assert.equal(editCheck(write, EDIT_DEFS, LOADED, { ...LOADED, "Project": seg("Lumen Festival"), "Amount": 2000 }).done, true);
 });

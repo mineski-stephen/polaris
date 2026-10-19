@@ -95,7 +95,7 @@ export function createCollections(ctx) {
                  r.invoiceDate ? dayOnly(r.invoiceDate) : "",
                  r.files.length ? `${r.files.length} file${r.files.length === 1 ? "" : "s"}` : ""]
       .filter(x => x !== "").map(x => h("span", { class: "part" }, x)).flatMap((x, i) => (i ? [" · ", x] : [x]));
-    return h("tr", { class: "urow", "data-id": r.id },
+    return ctx.openable(h("tr", { class: "urow", "data-id": r.id },
       td("c-ar", r.arName || h("span", { class: "none" }, "(no AR name)"), sub.length ? h("span", { class: "sub-line" }, sub) : null),
       td("c-code", r.code ? copyableText(r.code) : ""),
       td("c-amount num", r.amount !== null ? fmt.money(r.amount) : ""),
@@ -108,7 +108,7 @@ export function createCollections(ctx) {
         "aria-label": `${r.invoiceNo ? "Edit" : "Add"} invoice details for ${r.arName}`,
         onclick: () => openDetails(r) }, ic(r.invoiceNo ? "pencil" : "plus"))),
       h("td", { class: "brk b1", "aria-hidden": "true" }),
-      h("td", { class: "brk b2", "aria-hidden": "true" }));
+      h("td", { class: "brk b2", "aria-hidden": "true" })), "collections", r.id, r.arName || r.code);
   }
 
   /* After a push or a save: bring the row into view and let it glow. */

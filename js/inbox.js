@@ -2,10 +2,11 @@
    sheet (with the BD picker), and Ignore with Undo. */
 
 import { RULES, LARK } from "./config.js";
-import { TABLE_TITLES, pushBrief, pushPar, pushCollections, pushAndon, setIgnore, newClientToken, writableOnly, fillGaps } from "./ops.js";
+import { TABLE_TITLES, pushBrief, pushPar, pushCollections, pushAndon, setIgnore, newClientToken, writableOnly, fillGaps,
+         saveEdit, findRecord } from "./ops.js";
 import {
   universeFromBrief, collectionsChange, stepStatus, parAfterAdding, defaultVat, vatMentions,
-  people, andonFromBrief, auditPatch, auditMissing, auditFilesMissing, monthOf,
+  people, andonFromBrief, auditPatch, auditMissing, auditFilesMissing, monthOf, clean, editChanges, editWrite,
 } from "./sync.js";
 import { uploadSizeProblem } from "./errors.js";
 import { $, h, ic, toast, fmt, flash, copyable, store, collapse, busy, radioKeys } from "./ui.js";
@@ -286,7 +287,9 @@ export function createInbox(ctx) {
     downOnBackdrop = false;
   });
   dialog.addEventListener("close", () => {
-    if (sheet && !sheet.done) S.drafts.set(draftKey(sheet.card) + (sheet.invalid ? ":invalid" : ""), { choices: sheet.choices, clientToken: sheet.clientToken, targetId: sheet.targetId });
+    // (a row opened and closed without a change leaves no draft)
+    const untouched = sheet && sheet.card.kind === "edit" && !Object.keys(sheet.choices.edits || {}).length && !(sheet.choices.files || []).length;
+    if (sheet && !sheet.done && !untouched) S.drafts.set(draftKey(sheet.card) + (sheet.invalid ? ":invalid" : ""), { choices: sheet.choices, clientToken: sheet.clientToken, targetId: sheet.targetId });
     sheet = null;
   });
   $("#sheetForm").addEventListener("submit", (e) => e.preventDefault());   // Enter in a field mustn't send
@@ -303,7 +306,7 @@ export function createInbox(ctx) {
   }
   narrow.addEventListener("change", placeDoc);
   function paintDoc() {
-    if (!sheet) return;
+    if (!sheet || sheet.card.kind === "edit") return;   // the row editor paints its own (editable) row
     rowDoc.render(docBox, preview(sheet.card, { choices: sheet.choices, targetId: sheet.targetId, invalid: sheet.invalid }));
   }
 
@@ -524,12 +527,105 @@ export function createInbox(ctx) {
     refresh();
   }
 
+  /* ======================= the row editor =======================
+     A row clicked in the Universe, Collections or ANDON table opens here. The row
+     beside the sheet (#sheetDoc) becomes editable, every typed column of it; the
+     sheet itself lists what's been changed, each with a way back. Push sends the
+     changes to the queue like any other push: files upload first, then the row is
+     re-read (a cell someone changed meanwhile stops it), written and read back. */
+  const EDIT_WHERE = { universe: "Universe", collections: "Collections", andon: "ANDON" };
+  const EDIT_TITLE = { universe: "Project", collections: "AR Name", andon: "Project" };
+
+  /* The card a row edit travels as (in the queue too), from the row as listed. */
+  function editCard(id) {
+    const [table, rowId] = String(id).split(":");
+    const rec = S.data && (S.data[table] || []).find(r => r.record_id === rowId);
+    if (!rec || !EDIT_WHERE[table]) return null;
+    const f = rec.fields || {};
+    return { kind: "edit", id: `${table}:${rowId}`, table, rowId, code: clean(f["Project Code"]),
+             name: clean(f[EDIT_TITLE[table]]) || clean(f["Project"]) || "", notes: [] };
+  }
+  function openRecord(table, rowId) {
+    const c = editCard(`${table}:${rowId}`);
+    if (c) openSheet(c);
+  }
+  const editCount = (n) => `${n} change${n === 1 ? "" : "s"}`;
+
+  function buildEdit(body, c) {
+    const ch = sheet.choices;
+    ch.edits = ch.edits || {};
+    ch.files = ch.files || [];   // (a draft never keeps files)
+    ch.bad = ch.bad || [];
+    ch.names = ch.names instanceof Map ? ch.names : new Map();
+    const defs = ctx.fieldsOf(c.table);
+    const s = sheet;
+    let doc = null;
+    const list = h("ul", { class: "changes", "aria-label": "Changes to push" });
+    const blockNote = h("p", { class: "note", role: "status", hidden: true });
+    put(body, h("p", { class: "set-sub" }, "Change any field in the row. Each change is listed here, and nothing goes to Lark until you push."),
+      list, blockNote);
+
+    const refresh = () => {
+      if (!ch.loaded || !doc) return;
+      const changes = editChanges(defs, ch.loaded, ch);
+      const n = Object.keys(changes).length;
+      const bad = ch.bad.filter(k => k in ch.edits);
+      const tooBig = ch.files.map(f => uploadSizeProblem(f, LARK.maxUploadMb)).filter(Boolean);
+      s.blocked = !ctx.canWriteFor(`edit:${c.table}`) ? `Pushing to ${EDIT_WHERE[c.table]} is off: ${ctx.problemsFor(`edit:${c.table}`)[0] || "your login can only read the tables."}`
+        : bad.length ? `Check ${bad.join(", ")}: ${bad.length === 1 ? "it isn't" : "they aren't"} valid yet.`
+        : tooBig.length ? tooBig[0]
+        : n ? "" : "Nothing changed yet.";
+      go.disabled = s.busy || !!s.blocked;
+      if (!s.busy) go.querySelector(".label").textContent = n ? `Push ${editCount(n)}` : "Push changes";
+      blockNote.hidden = !s.blocked || !n && !bad.length;
+      blockNote.textContent = s.blocked;
+      doc.mark(changes);
+      // The list: what each field becomes, what it was, and × to put it back.
+      const byName = new Map(defs.map(d => [d.field_name, d]));
+      list.replaceChildren(...(n ? Object.entries(changes).map(([k, v]) => {
+        const def = byName.get(k);
+        const before = doc.show(def, ch.loaded[k]), after = doc.show(def, v);
+        return h("li", { class: "change" },
+          h("button", { type: "button", class: "change-main", title: `Go to ${k}`, onclick: () => doc.focus(k) },
+            h("b", null, k),
+            h("span", { class: "change-vals" }, before ? h("del", null, before) : null,
+              h("span", { class: "change-new" }, after || "(empty)"))),
+          h("button", { type: "button", class: "change-undo", "aria-label": `Undo the change to ${k}`, title: "Put it back as it is in Lark",
+            onclick: () => { doc.revert(k); refresh(); } }, ic("x")));
+      }) : [h("li", { class: "change is-empty" }, "Nothing changed yet. Click a field in the row to change it.")]));
+    };
+    s.refresh = refresh;
+
+    // The whole row, fresh from Lark (every column, not only the ones the table shows).
+    const load = async () => {
+      s.blocked = "Reading the row…";
+      go.disabled = true;
+      $("#sheetError").hidden = true;
+      docBox.replaceChildren(h("div", { class: "loader" }, h("div", { class: "loader-title" }, h("span", { class: "spinner" }), "Reading the row from Lark…")));
+      try {
+        const rec = await findRecord(ctx.call, ctx.tables[c.table], c.rowId);
+        if (sheet !== s) return;   // closed meanwhile
+        if (!rec) throw Object.assign(new Error("gone"), { userMessage: "That row isn't in Lark any more. Refresh to see what Lark has now." });
+        ch.loaded = rec.fields || {};
+        doc = rowDoc.renderEdit(docBox, { table: c.table, loaded: ch.loaded, choices: ch, names: ch.names, name: c.name,
+                                           peoplePicker, onChange: refresh });
+        refresh();
+      } catch (err) {
+        if (sheet !== s || isDeadToken(err)) return;
+        docBox.replaceChildren(h("div", { class: "callout callout-err" }, ic("alert"), h("div", null, describe(err)),
+          h("button", { type: "button", class: "btn btn-sm", onclick: load }, "Try again")));
+      }
+    };
+    load();
+  }
+
   function defaults(c) {
     if (c.kind === "brief") return { vat: defaultVat(c.currency), client: "", bd: [], otherLinks: "", showLinks: false };
     if (c.kind === "invoice") {
       return { targetId: c.target, arName: c.name, invoiceNo: "", siNo: "", invoiceDate: null, invoiceDateOk: true, files: [], showDetails: false };
     }
     if (c.kind === "andon") return { pm: [], tribe: "" };
+    if (c.kind === "edit") return { edits: {}, files: [], bad: [], loaded: null };
     if (c.kind === "audit") return { fields: [...c.gaps], vat: defaultVat(c.brief ? c.brief.currency : "PHP"), values: null, edited: [], bad: [], files: [] };
     return {};
   }
@@ -549,14 +645,17 @@ export function createInbox(ctx) {
       sheet.choices.targetId = c.target;
     }
     $("#sheetTitle").textContent = { brief: "Push to Universe", par: "Add PAR to Universe", invoice: "Add to Collections", andon: "Add to ANDON",
-                                     audit: `Fill blanks in ${c.target === "andon" ? "ANDON" : "the Universe"}` }[c.kind];
+                                     audit: `Fill blanks in ${c.target === "andon" ? "ANDON" : "the Universe"}`,
+                                     edit: `Changes to this ${EDIT_WHERE[c.table]} row` }[c.kind];
     $("#sheetSub").replaceChildren(copyable(c.code, { label: "project code", empty: "No code" }),
       ...((c.kind === "par" || c.kind === "invoice") && c.requestNo ? [" · request ", copyable(c.requestNo, { label: "request number" })] : []), ` · ${c.name}`);
-    go.querySelector(".label").textContent = { brief: "Push to Universe", par: "Add PAR", invoice: "Add to Collections", andon: "Add to ANDON", audit: "Fill" }[c.kind];
+    go.querySelector(".label").textContent = { brief: "Push to Universe", par: "Add PAR", invoice: "Add to Collections", andon: "Add to ANDON", audit: "Fill",
+                                               edit: "Push changes" }[c.kind];
     $("#sheetError").hidden = true;
     const body = $("#sheetBody");
     body.replaceChildren();
-    if (c.kind === "brief") buildBrief(body, c);
+    if (c.kind === "edit") buildEdit(body, c);
+    else if (c.kind === "brief") buildBrief(body, c);
     else if (c.kind === "par") buildPar(body, c);
     else if (c.kind === "andon") buildAndon(body, c);
     else if (c.kind === "audit") buildAudit(body, c);
@@ -818,6 +917,11 @@ export function createInbox(ctx) {
     for (const list of [ch.bd, ch.pm]) (list || []).forEach(u => { names[u.id] = u.name; });
     if (ch.names instanceof Map) ch.names.forEach((n, id) => { names[id] = n; });
     const base = { code: c.code || "", name: c.name || "", names };
+    if (c.kind === "edit") {
+      const fields = editChanges(ctx.fieldsOf(c.table), ch.loaded || {}, ch);
+      const n = Object.keys(fields).length;
+      return { ...base, verb: `Change ${n} field${n === 1 ? "" : "s"} in ${EDIT_WHERE[c.table]}`, table: c.table, rowId: c.rowId, fields };
+    }
     if (c.kind === "brief") return { ...base, verb: "Push to Universe", table: "universe", rowId: null, fields: universeFromBrief(c, ch, RULES) };
     if (c.kind === "andon") return { ...base, verb: "Add to ANDON", table: "andon", rowId: null, fields: andonPayload(c, ch) };
     if (c.kind === "par") {
@@ -849,7 +953,19 @@ export function createInbox(ctx) {
   async function perform(c, job, { onStatus = () => {} } = {}) {
     let res, payload, extra = {};
     const ch = job.choices;
-    if (c.kind === "brief") {
+    if (c.kind === "edit") {
+      // New files upload first (a failed upload writes nothing; a retry reuses the tokens).
+      const defs = ctx.fieldsOf(c.table), t = ctx.tables[c.table];
+      if ((ch.files || []).length) {
+        await uploadFiles(ch.files, t, onStatus);
+        onStatus("Pushing…");
+      }
+      const changes = editChanges(defs, ch.loaded || {}, ch);
+      if (!Object.keys(changes).length) throw Object.assign(new Error("nothing"), { userMessage: "There's nothing to change." });
+      payload = editWrite(changes, defs);
+      res = await saveEdit(ctx.call, t, c.rowId, payload, ch.loaded || {}, defs);
+      extra = { changes };
+    } else if (c.kind === "brief") {
       payload = universeFromBrief(c, ch, RULES);
       extra = { bd: (ch.bd || []).map(u => ({ id: u.id, name: u.name })) };
       res = await pushBrief(ctx.call, ctx.tables, RULES, c, payload, job.clientToken);
@@ -992,5 +1108,5 @@ export function createInbox(ctx) {
     }
   }
 
-  return { render, renderLoader, perform, preview, reopen, keyOf: draftKey };
+  return { render, renderLoader, perform, preview, reopen, keyOf: draftKey, openRecord, editCard };
 }
