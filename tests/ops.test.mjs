@@ -107,6 +107,29 @@ test("fill blanks: blank cells are written, filled ones are skipped and reported
   assert.equal(row.fields["Project Description"][0].text, "typed by hand");
 });
 
+test("fill blanks: the signed CE goes in by token, is read back, and never replaces a file someone attached", async () => {
+  const CE = RULES.auditFiles.field;
+  const row = universeRow({ "Status": "Signed CE" });
+  const lark = fakeLark([row]);
+  const files = [{ file_token: "boxA" }, { file_token: "boxB" }];
+  const res = await fillGaps(lark.call, T.universe, "recU1", { [CE]: files });
+  assert.deepEqual(lark.writes().map(w => w.body.records[0].fields), [{ [CE]: files }]);
+  assert.deepEqual(res.mismatches, []);                       // compared by token
+  // someone attached one meanwhile: nothing is written
+  const theirs = universeRow({ [CE]: [{ file_token: "boxZ", name: "theirs.pdf" }] });
+  const lark2 = fakeLark([theirs]);
+  await assert.rejects(fillGaps(lark2.call, T.universe, "recU1", { [CE]: files }), AlreadyDone);
+  assert.equal(lark2.writes().length, 0);
+});
+
+test("schema: the signed CE is an Attachment the Universe reads, and only audit pushes need it", () => {
+  const u = schemaSpec(RULES).universe, CE = RULES.auditFiles.field;
+  assert.ok(u.read.includes(CE));
+  assert.equal(u.optional[CE], 17);
+  assert.ok(u.neededBy["audit:universe"].includes(CE));
+  assert.ok(!(CE in u.fields), "a missing column mustn't stop brief and PAR pushes");
+});
+
 test("a create that Lark accepted but sent no row for is an unknown outcome", async () => {
   const call = async () => ({ code: 0, data: {} });
   await assert.rejects(createRecord(call, T.universe, { "Project Code": "X" }, "tok"),

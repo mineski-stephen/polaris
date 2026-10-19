@@ -534,9 +534,27 @@ export function auditMissing(card, patch) {
   return (card.required || []).filter(k => isBlank(patch[k]));
 }
 
+/* A Universe project that must have its signed CE on file (rules.auditFiles, by Status). */
+export function needsSignedCe(fields, rules) {
+  const r = rules.auditFiles;
+  if (!r) return false;
+  const status = clean(fields["Status"]);
+  return r.statuses.some(s => s.trim() === status);
+}
+
+/* The attachment columns that are ticked in the sheet but have no file picked yet
+   (`choices.files`): the Fill is refused while any are (untick to fill the rest). */
+export function auditFilesMissing(card, choices) {
+  const pick = choices.fields || card.gaps;
+  const files = (choices.files || []).length;
+  return (card.files || []).filter(k => pick.includes(k) && !files);
+}
+
 /* Every row in `records` (Universe or ANDON, `target`) with gaps its brief can
    fill, and, in the Universe, every won project missing a required column
-   (`required`, filled by a person; such a row gets a card even without a brief).
+   (`required`, filled by a person; such a row gets a card even without a brief),
+   and every signed project with no signed CE on file (`files`, uploaded by a
+   person; also without a brief).
    `hide` = keys of cards hidden on this device. `options`/`fields` = the table's
    select options and columns (only typed columns are ever written; a required
    column the table doesn't have isn't asked for).
@@ -552,11 +570,14 @@ export function auditCards(target, records, briefs, rules, { hide = new Set(), o
     const has = fields ? new Set(fields.map(d => d.field_name)) : null;
     const required = target === "universe" && isWonProject(f, rules)
       ? rules.auditRequired.fields.filter(k => (!has || has.has(k)) && isBlank(f[k])) : [];
+    const af = rules.auditFiles;
+    const files = target === "universe" && af && needsSignedCe(f, rules) && (!has || has.has(af.field)) && isBlank(f[af.field])
+      ? [af.field] : [];
     const b = briefFor.get(code);
-    if (!b && !required.length) { hidden.noBrief++; continue; }
+    if (!b && !required.length && !files.length) { hidden.noBrief++; continue; }
     const brief = b ? briefAsCard(b) : null;
     const want = brief ? fromBrief(target, brief, row, rules, { options, fields }) : {};
-    const gaps = [...new Set([...Object.keys(want).filter(k => !AUDIT_SKIP[target].has(k) && isBlank(f[k])), ...required])];
+    const gaps = [...new Set([...Object.keys(want).filter(k => !AUDIT_SKIP[target].has(k) && isBlank(f[k])), ...required, ...files])];
     if (!gaps.length) continue;
     const id = `${target}:${row.record_id}`;
     if (seen.has(id)) continue;
@@ -564,7 +585,7 @@ export function auditCards(target, records, briefs, rules, { hide = new Set(), o
     const card = {
       kind: "audit", target, id, rowId: row.record_id, code,
       name: clean(f["Project"]) || (brief && brief.name) || "", status: target === "universe" ? clean(f["Status"]) : "",
-      submittedAt: brief ? brief.submittedAt : null, requestNo: brief ? brief.requestNo : "", brief, gaps, required,
+      submittedAt: brief ? brief.submittedAt : null, requestNo: brief ? brief.requestNo : "", brief, gaps, required, files,
       // The amount needs a VAT rate; the row has none, so the sheet asks for it.
       needsVat: !!brief && target === "universe" && gaps.includes("Amount (VAT-Ex.) (PHP)") && !clean(f["VAT%"]),
       notes: [], blocked: "",
@@ -580,13 +601,22 @@ export function auditCards(target, records, briefs, rules, { hide = new Set(), o
 /* The cells a push writes: the chosen gaps (`choices.fields`, default all),
    valued from the brief unless edited in the sheet (`choices.values`, in write
    format: briefs go out of date). A value left blank is never written.
-   `choices.vat` = the VAT rate when the row has none (then VAT% is written with the amount). */
+   `choices.vat` = the VAT rate when the row has none (then VAT% is written with the amount).
+   `choices.files` = the files for an attachment gap (card.files): [{name, size, file_token?}]. */
 export function auditPatch(card, row, choices, rules, { options, fields } = {}) {
   const want = card.brief ? fromBrief(card.target, card.brief, row, rules, { vat: choices.vat, options, fields }) : {};
   const pick = choices.fields || card.gaps;
   const out = {};
   for (const k of pick) {
     if (!card.gaps.includes(k)) continue;
+    // An attachment (the signed CE): the files picked in the sheet. Uploaded ones
+    // go out by file_token; one not uploaded yet shows by name (the push uploads
+    // every file before it writes, so a name is never sent to Lark).
+    if ((card.files || []).includes(k)) {
+      const files = choices.files || [];
+      if (files.length) out[k] = files.map(f => (f.file_token ? { file_token: f.file_token } : { name: f.name }));
+      continue;
+    }
     const v = choices.values && k in choices.values ? choices.values[k] : want[k];
     if (!isBlank(v)) out[k] = typeof v === "string" ? v.replace(/\r\n?/g, "\n").trim() : v;
   }

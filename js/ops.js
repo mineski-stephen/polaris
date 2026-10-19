@@ -35,7 +35,7 @@ export const TABLE_TITLES = {
 };
 
 /* Lark field type ids. */
-const T = { text: 1, number: 2, select: 3, multi: 4, date: 5, checkbox: 7, user: 11, url: 15 };
+const T = { text: 1, number: 2, select: 3, multi: 4, date: 5, checkbox: 7, user: 11, url: 15, file: 17 };
 /* Columns Lark fills itself (lookup, formula, link, stage, auto fields): never written. */
 const COMPUTED = new Set([18, 19, 20, 21, 24, 1001, 1002, 1003, 1004, 1005]);
 const TYPE_NAMES = { 1: "Text", 2: "Number", 3: "Single select", 4: "Multi select", 5: "Date",
@@ -57,7 +57,7 @@ export function schemaSpec(rules) {
              // …and the rest a push writes, so the push sheet can show the whole row
              "Mancom Phase", "Other Links",
              // …and what a won project must have (the audit asks for these)
-             ...rules.auditRequired.fields],
+             ...rules.auditRequired.fields, rules.auditFiles.field],
       index: ["Project Code", "Project", "Client", "PAR"],
       fields: {
         "Client": T.text, "Project": T.text, "Project Code": T.text, "PAR": T.text,
@@ -68,7 +68,8 @@ export function schemaSpec(rules) {
         "Mancom Phase": T.select, "Other Links": T.text,
       },
       // Hides a won project from the Invoices list, if the Universe has this column.
-      optional: { [rules.universeIgnoreField]: T.checkbox },
+      // The signed CE: an attachment the audit uploads to (its type is checked if it's there).
+      optional: { [rules.universeIgnoreField]: T.checkbox, [rules.auditFiles.field]: T.file },
       options: {
         "VAT%": ["12%", "0%"],
         "Status": [rules.newProjectStatus],
@@ -78,7 +79,7 @@ export function schemaSpec(rules) {
       // if one is missing, only invoice pushes stop.
       neededBy: { invoice: ["Amount (VAT-Inc.)", "Business Unit"],
                   // the audit can't ask for a column the Universe doesn't have
-                  "audit:universe": rules.auditRequired.fields },
+                  "audit:universe": [...rules.auditRequired.fields, rules.auditFiles.field] },
     },
     collections: {
       read: ["Project Code", "Invoice Request", "AR Name", "Invoice Amount", "Currency", "Sales Remarks", "Status",
@@ -87,7 +88,7 @@ export function schemaSpec(rules) {
       fields: {
         "AR Name": T.text, "Project Code": T.text, "Invoice Amount": T.number,
         "Currency": T.select, "Status": T.select, "Business Unit": T.select, "Invoice Request": T.number,
-        "Sales Remarks": T.text, "Invoice Number": T.text, "SI Number": T.text, "Invoice": 17, "Invoice Date": T.date,
+        "Sales Remarks": T.text, "Invoice Number": T.text, "SI Number": T.text, "Invoice": T.file, "Invoice Date": T.date,
       },
       options: {
         "Status": [...Object.values(rules.collectionStages), ...rules.invalidStatuses],

@@ -9,7 +9,7 @@
 
 /* version: bump it with every release and add an entry to CHANGELOG.md (newest first, same number).
    The top bar shows it beside the name, so people can see at a glance which version they're running. */
-export const APP = { name: "Polaris", key: "polaris", version: "1.0.1", env: "live" };   // env: "live" | "test"
+export const APP = { name: "Polaris", key: "polaris", version: "1.1.0", env: "live" };   // env: "live" | "test"
 export const ENV_LABEL = APP.env === "test" ? "Test copy" : "";         // shown in the header, never a gate
 
 /* The connection service: the shared Lark proxy (Render). `service` is the name its
@@ -96,6 +96,12 @@ export const RULES = {
     fields: ["Sign Date", "Month"],
     // Month defaults to the 1st of the Sign Date's month (until it's changed by hand).
     month: { field: "Month", from: "Sign Date" },
+  },
+  // The audit: Universe projects with these statuses must have the signed CE on
+  // file. A blank one gets a card, and the Fill uploads the file(s) to it.
+  auditFiles: {
+    field: "Signed CE (PDF)",
+    statuses: ["Fully Closed", "For Closing", "For Collection", "Signed CE"],
   },
 
   // Date-only fields (RFP Received Date) are stored as midnight in this offset.

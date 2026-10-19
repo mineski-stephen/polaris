@@ -10,6 +10,7 @@ import {
   universeFromBrief, verifyWritten, similarity, vatMentions,
   peoplePool, universeView, shortName, andonFromBrief, collectionsView, collectionRow, invoiceDetailsPatch,
   auditCards, auditPatch, parseDay, fillPlan, invoiceChangedSince, draftsToJSON, draftsFromJSON, queueToJSON, queueFromJSON, cellText, isWonProject, auditMissing, monthOf,
+  needsSignedCe, auditFilesMissing, isBlank,
 } from "../js/sync.js";
 import { writableOnly } from "../js/ops.js";
 
@@ -527,7 +528,8 @@ test("audit: Universe blanks the brief can fill, never cells that have a value",
   const rows = [
     rec("uX", { "Project Code": seg("2026TEG-P0600"), "Project": seg("Audit Fest (typed)"), "Status": "Signed CE",
                 "AM": [user("ou_other", "Someone Else")], "Year": seg("2026"), "Project Description": seg("  "),
-                "Sign Date": 1790500000000, "Month": "October" }),   // a won project that has what it needs
+                "Sign Date": 1790500000000, "Month": "October",
+                [RULES.auditFiles.field]: [{ file_token: "boxCE", name: "CE.pdf" }] }),   // a won project that has what it needs
     rec("uY", { "Project Code": seg("2026TEG-P0601"), "Project": seg("No brief") }),
   ];
   const { cards, hidden } = auditCards("universe", rows, [older, b, recalled], RULES);
@@ -797,4 +799,69 @@ test("audit: Month defaults to the 1st of the Sign Date's month, in the Month co
   // a Month picked by hand wins
   const picked = manila(2026, 6, 1);
   assert.equal(auditPatch(card, { fields: {} }, { fields: card.gaps, values: { "Sign Date": signed, "Month": picked } }, RULES, { fields })["Month"], picked);
+});
+
+/* ---------- the audit: the signed CE (an attachment a person uploads) ---------- */
+
+test("audit: a signed project with no Signed CE (PDF) gets a card, even without a brief", () => {
+  const CE = RULES.auditFiles.field;
+  const cols = ["Project Code", "Project", "Status", "Mancom Phase", "Sign Date", "Month", CE].map(field_name => ({ field_name, type: 1 }));
+  const done = { "Sign Date": 1790500000000, "Month": "October" };   // nothing else blank, so only the CE is asked for
+  const pdf = [{ file_token: "boxA", name: "CE.pdf", size: 1000 }];
+  const rows = [
+    rec("s1", { "Project Code": seg("2026TEG-P0800"), "Project": seg("Signed, no CE"), "Status": "Signed CE", ...done }),
+    rec("s2", { "Project Code": seg("2026TEG-P0801"), "Project": seg("Closed, CE on file"), "Status": "Fully Closed", ...done, [CE]: pdf }),
+    rec("s3", { "Project Code": seg("2026TEG-P0802"), "Project": seg("Awaiting signature"), "Status": "Won - Awaiting CE Signature", ...done }),
+    rec("s4", { "Project Code": seg("2026TEG-P0803"), "Project": seg("For closing"), "Status": "For Closing", ...done, [CE]: [] }),
+    rec("s5", { "Project Code": seg("2026TEG-P0804"), "Project": seg("Pitching"), "Status": "For Pitching" }),
+  ];
+  // the rule: exactly these four statuses (not "Won - Awaiting CE Signature": nothing is signed yet)
+  for (const s of ["Fully Closed", "For Closing", "For Collection", "Signed CE"]) assert.ok(needsSignedCe({ "Status": s }, RULES), s);
+  assert.ok(!needsSignedCe({ "Status": "Won - Awaiting CE Signature" }, RULES));
+  assert.ok(!needsSignedCe({ "Status": "For Pitching", "Mancom Phase": "7. Won" }, RULES));
+
+  const { cards, hidden } = auditCards("universe", rows, [], RULES, { fields: cols });
+  const by = Object.fromEntries(cards.map(c => [c.rowId, c]));
+  assert.deepEqual(by.s1.gaps, [CE]);
+  assert.deepEqual(by.s1.files, [CE]);
+  assert.deepEqual(by.s1.required, []);                // not a required column: it can be unticked
+  assert.equal(by.s1.brief, null);
+  assert.equal(by.s2, undefined);                      // already on file
+  assert.equal(by.s3, undefined);                      // not signed yet
+  assert.deepEqual(by.s4.files, [CE]);                 // an empty attachment list is blank
+  assert.equal(by.s5, undefined);
+  assert.equal(hidden.noBrief, 3);
+  // a Universe without the column: not asked for (the column check reports it instead)
+  assert.equal(auditCards("universe", rows, [], RULES, { fields: cols.filter(c => c.field_name !== CE) }).cards.length, 0);
+  // ANDON never gets it
+  assert.equal(auditCards("andon", rows, [], RULES, { fields: cols }).cards.length, 0);
+});
+
+test("audit: the signed CE is written as the uploaded files' tokens, and needs a file while ticked", () => {
+  const CE = RULES.auditFiles.field;
+  const card = { kind: "audit", target: "universe", gaps: ["Sign Date", "Month", CE], required: ["Sign Date", "Month"], files: [CE], brief: null };
+  const values = { "Sign Date": 1790500000000, "Month": "October" };
+  // ticked, no file: refused (untick it to fill the rest)
+  assert.deepEqual(auditFilesMissing(card, { fields: card.gaps, files: [] }), [CE]);
+  assert.ok(!(CE in auditPatch(card, { fields: {} }, { fields: card.gaps, values, files: [] }, RULES)));
+  assert.deepEqual(auditFilesMissing(card, { fields: ["Sign Date", "Month"], files: [] }), []);
+  assert.deepEqual(auditPatch(card, { fields: {} }, { fields: ["Sign Date", "Month"], values, files: [{ name: "x.pdf" }] }, RULES),
+    values);                                           // unticked: the files aren't written
+  // before the upload: by name (never sent: the push uploads first); after: by token only
+  const files = [{ name: "CE p1.pdf", size: 10 }, { name: "CE p2.pdf", size: 20 }];
+  assert.deepEqual(auditPatch(card, { fields: {} }, { fields: card.gaps, values, files }, RULES)[CE],
+    [{ name: "CE p1.pdf" }, { name: "CE p2.pdf" }]);
+  files[0].file_token = "boxA"; files[1].file_token = "boxB";
+  const p = auditPatch(card, { fields: {} }, { fields: card.gaps, values, files }, RULES);
+  assert.deepEqual(p, { ...values, [CE]: [{ file_token: "boxA" }, { file_token: "boxB" }] });
+  assert.deepEqual(auditFilesMissing(card, { fields: card.gaps, files }), []);
+  assert.deepEqual(auditMissing(card, p), []);
+  // a file someone attached meanwhile: left alone (only blank cells are filled)
+  assert.deepEqual(fillPlan({ [CE]: p[CE] }, { [CE]: [{ file_token: "other", name: "theirs.pdf" }] }), { written: {}, skipped: [CE] });
+  assert.ok(isBlank([]) && !isBlank([{ file_token: "boxA" }]));
+  // a reload keeps no file: the queued push is flagged so it can't run without it
+  const q = queueToJSON([{ id: "q1", key: "audit::s1", kind: "audit", cardId: "universe:s1", state: "waiting", at: Date.now(),
+    table: "universe", job: { clientToken: "t", choices: { fields: card.gaps, files: [{ name: "CE.pdf", size: 1, file: {} }] } } }]);
+  assert.equal(q.items[0].lostFiles, true);
+  assert.deepEqual(q.items[0].job.choices.files, [{ name: "CE.pdf", size: 1 }]);
 });

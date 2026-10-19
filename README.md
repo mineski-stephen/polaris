@@ -70,6 +70,7 @@ phone and on a PC, and every change is made as you, with your own Lark login.
      a new row's **AR Name** can be edited (for example add "Downpayment"). For an
      approved request you can add the invoice details (number, SI, date, file).
    - *Audit (Fill):* each blank the brief can fill, ticked and pre-filled; edit or untick.
+     A blank **Signed CE (PDF)** asks for the file(s), which upload when the push runs.
    The sheet's button (**Push to Universe**, **Fill 2 fields**, …) closes it at once:
    the card leaves the list, the next card's button has the keyboard, and the push
    goes to the **[queue](#the-push-queue)**.
@@ -266,7 +267,8 @@ The **Audit** tab checks every Universe and ANDON row against its Project Brief
 lists each row that has **blank cells the brief can fill**: AM, MKT, the amount,
 Project Description, start and end dates, RFP Received Date and Year for the
 Universe; the typed ANDON columns (AM, MKT (PITCH), Business Unit, Tools, Event
-Start / End…) for ANDON.
+Start / End…) for ANDON. It also lists signed projects with no signed CE on file
+(see below).
 
 **Won projects must have a Sign Date and a Month.** A Universe project whose Status
 is *Fully Closed*, *For Closing*, *For Collection*, *Signed CE* or *Won - Awaiting CE
@@ -278,6 +280,21 @@ Sign Date on the row, or the one you type; it follows the Sign Date until you ch
 Month yourself). The statuses, phases and columns are `auditRequired` in
 [`js/config.js`](js/config.js); if the Universe has no column by that name, audit
 pushes to the Universe stop and the column check says which one is missing.
+
+**Signed projects must have their signed CE on file.** A Universe project whose
+Status is *Fully Closed*, *For Closing*, *For Collection* or *Signed CE* gets a card
+when its **Signed CE (PDF)** attachment is blank, even without a brief (*Won - Awaiting
+CE Signature* isn't asked: nothing is signed yet). In the Fill sheet, **Add the signed
+CE** picks the file (PDF, up to 10 MB each; add several if the CE is in parts). The
+files upload to Lark (as you, through the connection service, like invoice files)
+when the push runs, before anything is written, so a failed upload writes nothing and
+**Retry** in the queue doesn't upload a file twice. The Fill is refused while the row
+is ticked with no file; untick it to fill the card's other blanks without it. Like
+every Fill, the file only goes into a cell that's still blank: if someone attached
+one meanwhile, theirs stays. The column and statuses are `auditFiles` in
+[`js/config.js`](js/config.js); if the Universe has no such column, audit pushes to
+the Universe stop and the column check says so (`npm run setup -- --apply --optional`
+creates it).
 
 - **Fill** shows each blank with an editor, pre-filled from the brief. Briefs go
   out of date, so change anything before pushing (text, amounts, dates, people,
@@ -572,7 +589,7 @@ the live tables.
 - **Narrow screens show the cards only.** Below 1280 px there's no Universe or
   Collections table, so a Collections row's invoice details (number, SI, date, file)
   can be added only from the push sheet of an approved request, or on a wider screen.
-- **Files in a draft.** If you cancel (or reload) an invoice sheet, the text you typed comes
+- **Files in a draft.** If you cancel (or reload) an invoice or audit sheet, the text you typed comes
   back, but the files you picked don't: add them again.
 - **One login lasts about 2 hours.** Lark gives no refresh token, so after that you log in again.
 
@@ -582,6 +599,7 @@ the live tables.
 
 | You see | What to do |
 | ------- | ---------- |
+| *Port 9123 is already in use, so this server didn't start.* (`tools/serve.py`), or the browser says *127.0.0.1 didn't send any data* | Another server already has port 9123, often an old one left running in the background. Stop it (close its window, or end the `python` process in Task Manager), then run `python tools/serve.py` again. Lark login only works on port 9123. |
 | *Polaris couldn't start.* | Reload. If it keeps happening, open Polaris from its web address (not a saved file). If you just deployed, a file is probably missing or not listed in the import map in `index.html`: run `npm run check:shell`. |
 | People report an old version (the number beside "Polaris" in the top bar is lower than the newest entry in `CHANGELOG.md`) | The page and every script are fetched fresh on each visit, so this is almost always the host's own cache (GitHub Pages can take a few minutes after a push) or an old tab left open. Reload the tab; in the browser console, `APP_BUILD` changes on each load. Check the files on the host are the new ones. |
 | *Waking up the connection… This can take up to a minute.* | Nothing; the free Render service is starting. It retries for up to 3 minutes. |
@@ -612,6 +630,8 @@ the live tables.
 | *Add this project's PAR to the Universe first.* | Use **Go to the PAR** (if it's listed), push it, then the invoice can go. |
 | *"…" changed since the list was loaded.* | Someone updated that Collections row meanwhile. Nothing was written; the list refreshed, so check the card again. The same message appears for invoice details: the cells you changed were changed in Lark first. |
 | *A won project needs Sign Date and Month.* (Fill) | Type the missing one(s) in; the Fill stays off until both have a value. |
+| *Add the file for Signed CE (PDF)…* (Fill) | Use **Add the signed CE** to pick the PDF, or untick **Signed CE (PDF)** to fill the card's other blanks without it. |
+| *"…" is over 10 MB* (Fill) | Compress the PDF (or split it into parts and add each one), then add it again. |
 | *Someone had already filled …, so those were left as they were.* (after Fill) | The audit only fills blank cells; those weren't blank any more. |
 | Red **Overridden** badge in the top bar | This browser is using another connection service address (Settings > Advanced, or a `?lark=` link). Clear it there, or open the page with `?reset`. |
 | Red *Preview mode* badge | `?preview` is on: the data is a snapshot and nothing is sent to Lark. Open Polaris without `?preview`. |

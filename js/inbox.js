@@ -1,12 +1,13 @@
 /* The Inbox: cards for Project Briefs, PARs and Invoice Requests, the push
    sheet (with the BD picker), and Ignore with Undo. */
 
-import { RULES } from "./config.js";
+import { RULES, LARK } from "./config.js";
 import { TABLE_TITLES, pushBrief, pushPar, pushCollections, pushAndon, setIgnore, newClientToken, writableOnly, fillGaps } from "./ops.js";
 import {
   universeFromBrief, collectionsChange, stepStatus, parAfterAdding, defaultVat, vatMentions,
-  people, andonFromBrief, auditPatch, auditMissing, monthOf,
+  people, andonFromBrief, auditPatch, auditMissing, auditFilesMissing, monthOf,
 } from "./sync.js";
+import { uploadSizeProblem } from "./errors.js";
 import { $, h, ic, toast, fmt, flash, copyable, store, collapse, busy, radioKeys } from "./ui.js";
 import { copyableText, dateField } from "./polaris-ui.js";
 import { createRowDoc } from "./rowdoc.js";
@@ -119,7 +120,7 @@ export function createInbox(ctx) {
           par: "Every PAR is in the Universe. Nice work!",
           invoice: "Collections is up to date. Nice work!",
           andon: "Every brief is in ANDON. Nice work!",
-          audit: "Nothing in the Universe or ANDON is missing what its brief has. Nice work!" }[S.tab];
+          audit: "Nothing in the Universe or ANDON has blanks to fill. Nice work!" }[S.tab];
     hiddenNote.textContent = hiddenSummary(list.hidden);
     S.entering.clear();
     if (S.flashCard) {
@@ -322,9 +323,9 @@ export function createInbox(ctx) {
         h("span", { class: "badge badge-info" }, AUDIT_WHERE[c.target]),
         h("span", { class: "item-date" }, c.submittedAt ? `Brief ${fmt.day(c.submittedAt)}` : "")),
       h("h3", null, c.name || "(no name)"),
-      // "…that the brief can fill" only when it can fill all of them (Sign Date and Month it never has).
+      // "…that the brief can fill" only when it can fill all of them (Sign Date, Month and the signed CE it never has).
       h("p", { class: "item-meta" }, h("b", null, `${c.gaps.length} blank`), ` in ${AUDIT_WHERE[c.target]}`,
-        c.requestNo ? ((c.required || []).length ? [" · brief ", copyable(c.requestNo, { label: "request number" })]
+        c.requestNo ? ((c.required || []).length || (c.files || []).length ? [" · brief ", copyable(c.requestNo, { label: "request number" })]
           : [" that the brief ", copyable(c.requestNo, { label: "request number" }), " can fill"]) : "",
         c.status ? ` · ${c.status}` : ""),
       h("ul", { class: "notes" }, h("li", { class: "flow" }, h("span", { class: "flow-row" }, "Missing"),
@@ -365,6 +366,7 @@ export function createInbox(ctx) {
     if (!ch.values) ch.values = { ...fromBrief() };
     ch.edited = ch.edited || [];
     ch.bad = ch.bad || [];
+    ch.files = ch.files || [];   // the signed CE (a draft never keeps files)
 
     const vatBox = h("div", { class: "field" });
     const refresh = () => {
@@ -372,12 +374,22 @@ export function createInbox(ctx) {
       const n = Object.keys(patch).length;
       const bad = ch.bad.filter(k => ch.fields.includes(k));
       const missing = auditMissing(c, patch);
+      const noFile = auditFilesMissing(c, ch);
+      const uploading = (c.files || []).some(k => k in patch);
+      const tooBig = uploading ? ch.files.map(f => uploadSizeProblem(f, LARK.maxUploadMb)).filter(Boolean) : [];
       sheet.blocked = bad.length ? `Check ${bad.join(", ")}: ${bad.length === 1 ? "it isn't" : "they aren't"} valid yet.`
+        : tooBig.length ? tooBig[0]
         : missing.length ? `A won project needs ${missing.join(" and ")}.`
+        : noFile.length ? `Add the file for ${noFile.join(", ")}${c.gaps.length > 1 ? ", or untick it to fill the rest" : ""}.`
         : n ? "" : "Tick at least one field to fill.";
       go.disabled = sheet.busy || !!sheet.blocked;
-      if (!sheet.busy) go.querySelector(".label").textContent = n ? `Fill ${n} field${n === 1 ? "" : "s"}` : "Fill";
-      blockNote.hidden = !sheet.blocked || (!n && !missing.length);
+      const files = ch.files.length;
+      if (!sheet.busy) {
+        go.querySelector(".label").textContent = !n ? "Fill"
+          : uploading && n === 1 ? `Upload ${files} file${files === 1 ? "" : "s"}`
+          : `Fill ${n} field${n === 1 ? "" : "s"}`;
+      }
+      blockNote.hidden = !sheet.blocked || (!n && !missing.length && !noFile.length);
       blockNote.textContent = sheet.blocked;
       vatBox.hidden = !(c.needsVat && ch.fields.includes(AMOUNT));
       paintDoc();
@@ -407,7 +419,33 @@ export function createInbox(ctx) {
       refresh();
     };
     let amountInput = null;
+    // The signed CE: files picked here are uploaded to Lark when the push runs, then
+    // put in the attachment cell. Adding a file ticks the row.
+    const filesEditor = (k) => {
+      const list = h("ul", { class: "files" });
+      const btnText = h("span");
+      const paint = (again = true) => {
+        list.replaceChildren(...ch.files.map((f, i) => h("li", null, ic("link"),
+          h("span", { class: "file-name" }, f.name, " ", h("span", { class: "file-size" }, `(${Math.max(1, Math.round(f.size / 1024)).toLocaleString()} KB)`)),
+          h("button", { type: "button", "aria-label": `Remove ${f.name}`, onclick: () => { ch.files.splice(i, 1); paint(); } }, ic("x")))));
+        list.hidden = !ch.files.length;
+        btnText.textContent = ch.files.length ? "Add another file" : "Add the signed CE";
+        if (again) refresh();
+      };
+      const input = h("input", { type: "file", multiple: true, hidden: true, accept: ".pdf,application/pdf" });
+      input.addEventListener("change", () => {
+        for (const file of input.files) ch.files.push({ name: file.name, size: file.size, file });
+        input.value = "";
+        if (ch.files.length && !ch.fields.includes(k)) { ch.fields.push(k); tick[k].checked = true; }
+        paint();
+      });
+      paint(false);
+      return h("div", { class: "field" }, list,
+        h("label", { class: "btn btn-sm file-btn" }, ic("plus"), btnText, input),
+        h("p", { class: "set-sub" }, `PDF, up to ${LARK.maxUploadMb} MB each. Uploaded to Lark when the push runs.`));
+    };
     const editor = (k) => {
+      if ((c.files || []).includes(k)) return filesEditor(k);
       const id = `gap-v-${k.replace(/\W+/g, "-")}`;
       const v = ch.values[k];
       const type = types.get(k) || (AUDIT_DATES.has(k) ? 5 : 1);
@@ -492,7 +530,7 @@ export function createInbox(ctx) {
       return { targetId: c.target, arName: c.name, invoiceNo: "", siNo: "", invoiceDate: null, invoiceDateOk: true, files: [], showDetails: false };
     }
     if (c.kind === "andon") return { pm: [], tribe: "" };
-    if (c.kind === "audit") return { fields: [...c.gaps], vat: defaultVat(c.brief ? c.brief.currency : "PHP"), values: null, edited: [], bad: [] };
+    if (c.kind === "audit") return { fields: [...c.gaps], vat: defaultVat(c.brief ? c.brief.currency : "PHP"), values: null, edited: [], bad: [], files: [] };
     return {};
   }
 
@@ -724,16 +762,26 @@ export function createInbox(ctx) {
     if (ch.invoiceNo.trim()) out["Invoice Number"] = ch.invoiceNo.trim();
     if (ch.siNo.trim()) out["SI Number"] = ch.siNo.trim();
     if (ch.invoiceDate) out["Invoice Date"] = ch.invoiceDate;   // already midnight Manila
-    const todo = ch.files.filter(f => !f.file_token);
-    for (let i = 0; i < todo.length; i++) {
-      const what = todo.length > 1 ? `Uploading ${i + 1} of ${todo.length}` : "Uploading";
-      onStatus(`${what}…`);
-      todo[i].file_token = await uploadToBase(todo[i].file, ctx.tables.collections, ctx.token(),
-        { onProgress: (p) => onStatus(`${what} ${Math.round(p * 100)}%`) });
-    }
+    await uploadFiles(ch.files, ctx.tables.collections, onStatus);
     if (ch.files.length) out["Invoice"] = ch.files.map(f => ({ file_token: f.file_token }));
     onStatus("Pushing…");
     return out;
+  }
+
+  /* Upload the files that don't have a file_token yet to the table's Base (Lark's
+     drive upload_all, as you), one at a time, with progress through onStatus. The
+     token is kept on each file, so a retry from the queue doesn't upload it twice. */
+  async function uploadFiles(files, table, onStatus) {
+    const todo = files.filter(f => !f.file_token);
+    for (let i = 0; i < todo.length; i++) {
+      if (!todo[i].file) {   // a file object only lives in memory: a reload loses it
+        throw Object.assign(new Error("lost file"), { userMessage: `“${todo[i].name}” was lost when the page reloaded. Edit the push and add it again.` });
+      }
+      const what = todo.length > 1 ? `Uploading ${i + 1} of ${todo.length}` : "Uploading";
+      onStatus(`${what}…`);
+      todo[i].file_token = await uploadToBase(todo[i].file, table, ctx.token(),
+        { onProgress: (p) => onStatus(`${what} ${Math.round(p * 100)}%`) });
+    }
   }
 
   /* Push: the sheet closes at once and the write goes to the queue (js/queue.js),
@@ -779,6 +827,8 @@ export function createInbox(ctx) {
     }
     if (c.kind === "audit") {
       const fields = auditPatch(c, auditRow(c), ch, RULES, auditOpts(c));
+      // The signed CE shows by file name (the write itself uses the uploaded tokens).
+      for (const k of c.files || []) if (k in fields) fields[k] = (ch.files || []).map(f => ({ name: f.name }));
       const n = Object.keys(fields).length;
       return { ...base, verb: `Fill ${n} blank${n === 1 ? "" : "s"} in ${AUDIT_WHERE[c.target]}`, table: c.target, rowId: c.rowId, fields };
     }
@@ -813,6 +863,18 @@ export function createInbox(ctx) {
       const missing = auditMissing(c, payload);
       if (missing.length) {   // refused here too, not only in the sheet
         throw Object.assign(new Error("required"), { userMessage: `A won project needs ${missing.join(" and ")}.` });
+      }
+      const noFile = auditFilesMissing(c, ch);
+      if (noFile.length) throw Object.assign(new Error("no file"), { userMessage: `Add the file for ${noFile.join(", ")}.` });
+      // The signed CE: upload its files first (a failed upload writes nothing), then
+      // the cell gets their tokens, with the rest of the Fill.
+      if ((c.files || []).some(k => k in payload)) {
+        await uploadFiles(ch.files, ctx.tables[c.target], onStatus);
+        payload = auditPatch(c, auditRow(c), ch, RULES, auditOpts(c));
+        onStatus("Pushing…");
+      }
+      if (Object.values(payload).some(v => Array.isArray(v) && v.some(x => x && x.name && !x.file_token))) {
+        throw Object.assign(new Error("not uploaded"), { userMessage: "A file didn't upload. Try again." });
       }
       res = await fillGaps(ctx.call, ctx.tables[c.target], c.rowId, payload);
     } else {

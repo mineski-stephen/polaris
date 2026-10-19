@@ -69,7 +69,8 @@ test("setup: the plan lists missing columns and options, and ignores what's fine
   assert.deepEqual(plan.options.map(o => [o.field, o.add]), [["Status", [RULES.newProjectStatus]]]);
   assert.deepEqual(plan.wrongType, []);
   assert.ok(plan.notes.some(n => /IGNORE/.test(n)), "the optional IGNORE column is mentioned");
-  assert.deepEqual(planRepair("universe", spec, liveUniverse(), { optional: true }).columns.map(c => c.name), ["Mancom Phase", "IGNORE"]);
+  assert.deepEqual(planRepair("universe", spec, liveUniverse(), { optional: true }).columns.map(c => c.name),
+    ["Mancom Phase", "IGNORE", RULES.auditFiles.field]);
   assert.equal(planRepair("collections", schemaSpec(RULES).collections, liveCollections()).columns.length, 0);
 });
 
