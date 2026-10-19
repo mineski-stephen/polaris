@@ -9,7 +9,7 @@
 
 /* version: bump it with every release and add an entry to CHANGELOG.md (newest first, same number).
    The top bar shows it beside the name, so people can see at a glance which version they're running. */
-export const APP = { name: "Polaris", key: "polaris", version: "1.2.1", env: "live" };   // env: "live" | "test"
+export const APP = { name: "Polaris", key: "polaris", version: "1.3.3", env: "live" };   // env: "live" | "test"
 export const ENV_LABEL = APP.env === "test" ? "Test copy" : "";         // shown in the header, never a gate
 
 /* The connection service: the shared Lark proxy (Render). `service` is the name its
@@ -38,12 +38,17 @@ export const TABLES = {
     // Lark app itself can't), so the Node checks skip it. Don't use the "ANDON 2026"
     // table in the base above: it's a synced, read-only mirror.
     andon:       "https://mineskiglobal.larksuite.com/base/DOoobrd5IaEIwjshAnuuuDFasjg?table=tblS77AM8iHOWd0s&view=vewxixKUQf",
+    // Variables: settings the team edits from Polaris (Settings > Custom tags), one
+    // row per value (see RULES.tags).
+    variables:   "https://mineskiglobal.sg.larksuite.com/base/NP7TbjwHNaTyLOsWafelN9wNgEd?table=tblKxdm95rmy8d9B&view=vewl27jzDV",
   },
   // The test copies. Paste their links here before setting APP.env to "test": an
   // empty link stops the page at start-up, so it can never fall back to production.
   test: {
     universe: "", collections: "", brief: "", par: "", invoice: "",
     andon:       "https://mineskiglobal.larksuite.com/base/DOoobrd5IaEIwjshAnuuuDFasjg?table=tblS77AM8iHOWd0s&view=vewxixKUQf",
+    // (settings, not project data: the test setup shares the live list of custom tags)
+    variables:   "https://mineskiglobal.sg.larksuite.com/base/NP7TbjwHNaTyLOsWafelN9wNgEd?table=tblKxdm95rmy8d9B&view=vewl27jzDV",
   },
 };
 export const TABLE_LINKS = TABLES[APP.env];
@@ -102,6 +107,22 @@ export const RULES = {
   auditFiles: {
     field: "Signed CE (PDF)",
     statuses: ["Fully Closed", "For Closing", "For Collection", "Signed CE"],
+  },
+  // Custom tags: "Mark as No Revenue", "Mark as Hidden"… under an audit card's Hide.
+  // The tags are the rows of the Variables table whose `nameColumn` is `variable`
+  // (one row per tag, the tag in `valueColumn`); Settings adds and removes them.
+  // Marking writes the tag into `field` (plain text, tags separated by commas) on
+  // the card's row, in the tables listed in `tables`. A row with a custom tag leaves
+  // the audit list and shows in that tag's group at the bottom. If the Variables table
+  // names its columns differently, Polaris finds them itself (the one holding `variable`).
+  tags: {
+    variable: "custom_tag",
+    field: "Tags",
+    // Only the Universe: ANDON belongs to Project Management and has no Tags column.
+    // Its audit cards keep "Hide on this device". Add "andon" here once it has one.
+    tables: ["universe"],
+    nameColumn: "Variable",
+    valueColumn: "Value",
   },
 
   // Date-only fields (RFP Received Date) are stored as midnight in this offset.

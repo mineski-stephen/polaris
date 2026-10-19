@@ -9,6 +9,36 @@ or links stop working), add an entry here with the same number and the date,
 and say what changed in the team's words. `npm run check:shell` fails if the
 two numbers differ.
 
+## 1.3.3 · Oct 19, 2026
+
+- The Project Brief no longer has an **MKT** column, so Polaris stopped asking for
+  it (pushing was switched off with *Project Brief: column “MKT” is missing.*). A
+  pushed brief now leaves the Universe's **MKT** and ANDON's **MKT (PITCH)** blank,
+  and the audit no longer offers them as blanks the brief can fill. Set MKT by
+  clicking the project's row in the Universe table.
+
+## 1.3.2 · Oct 19, 2026
+
+- Settings > Custom tags no longer shows a stray "null" under the Add tag box.
+
+## 1.3.1 · Oct 19, 2026
+
+- Custom tags are for **Universe** audit cards only. ANDON belongs to Project
+  Management and has no Tags column, so its audit cards keep the plain **Hide**
+  (on this device), and Polaris no longer looks for a Tags column there.
+
+## 1.3.0 · Oct 19, 2026
+
+- **Custom tags on audit cards.** **Hide ▾** now offers *Mark as No Revenue*,
+  *Mark as Hidden* and any other custom tag, plus *Hide on this device* as before.
+  Marking writes the tag into the row's **Tags** column (Universe or ANDON), so the
+  card leaves the Audit list for everyone and shows in that tag's group at the
+  bottom of the list. **Unmark** puts it back; **Undo** works too.
+- **Settings > Custom tags** lists the tags (from the Variables table in Lark),
+  with how many rows each marks. Add one, or remove one (its rows come back into
+  the list; their Tags cells aren't changed).
+- Searching the Audit list also finds cards by their tag.
+
 ## 1.2.1 · Oct 19, 2026
 
 - **ANDON is sorted by Project Code, Z-A**, so the newest projects are on top

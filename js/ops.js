@@ -8,6 +8,7 @@
 
 import {
   indexUniverse, indexCollections, verifyWritten, parAfterAdding, clean, fillPlan, invoiceChangedSince, editCheck,
+  tagsWith, tagsWithout,
 } from "./sync.js";
 import { LARK } from "./config.js";
 import { LarkError } from "./errors.js";
@@ -31,7 +32,7 @@ export function parseBaseLink(link) {
 
 export const TABLE_TITLES = {
   universe: "Universe", collections: "Collections", brief: "Project Brief",
-  par: "Project Approval", invoice: "Invoice Request", andon: "ANDON",
+  par: "Project Approval", invoice: "Invoice Request", andon: "ANDON", variables: "Variables",
 };
 
 /* Lark field type ids. */
@@ -46,6 +47,8 @@ const TYPE_NAMES = { 1: "Text", 2: "Number", 3: "Single select", 4: "Multi selec
    columns (plus, for the tables pushes write to, their lookups and formulas: see
    columnsToRead). `options` lists select values the page writes, which must exist. */
 export function schemaSpec(rules) {
+  // Custom tags only where rules.tags.tables says there's a Tags column.
+  const tagsIn = (key) => (rules.tags.tables || []).includes(key);
   return {
     universe: {
       // Everything the cards and the Universe view need; `index` is the lean set
@@ -57,7 +60,9 @@ export function schemaSpec(rules) {
              // …and the rest a push writes, so the push sheet can show the whole row
              "Mancom Phase", "Other Links",
              // …and what a won project must have (the audit asks for these)
-             ...rules.auditRequired.fields, rules.auditFiles.field],
+             ...rules.auditRequired.fields, rules.auditFiles.field,
+             // …and the custom tags an audit card is marked with
+             ...(tagsIn("universe") ? [rules.tags.field] : [])],
       index: ["Project Code", "Project", "Client", "PAR"],
       fields: {
         "Client": T.text, "Project": T.text, "Project Code": T.text, "PAR": T.text,
@@ -69,7 +74,9 @@ export function schemaSpec(rules) {
       },
       // Hides a won project from the Invoices list, if the Universe has this column.
       // The signed CE: an attachment the audit uploads to (its type is checked if it's there).
-      optional: { [rules.universeIgnoreField]: T.checkbox, [rules.auditFiles.field]: T.file },
+      // Custom tags (plain text, comma-separated): "Mark as …" on an audit card writes here.
+      optional: { [rules.universeIgnoreField]: T.checkbox, [rules.auditFiles.field]: T.file,
+                  ...(tagsIn("universe") ? { [rules.tags.field]: T.text } : {}) },
       options: {
         "VAT%": ["12%", "0%"],
         "Status": [rules.newProjectStatus],
@@ -79,7 +86,9 @@ export function schemaSpec(rules) {
       // if one is missing, only invoice pushes stop.
       neededBy: { invoice: ["Amount (VAT-Inc.)", "Business Unit"],
                   // the audit can't ask for a column the Universe doesn't have
-                  "audit:universe": [...rules.auditRequired.fields, rules.auditFiles.field] },
+                  "audit:universe": [...rules.auditRequired.fields, rules.auditFiles.field],
+                  // without a Tags column, only "Mark as …" stops (Hide on this device still works)
+                  ...(tagsIn("universe") ? { "tag:universe": [rules.tags.field] } : {}) },
     },
     collections: {
       read: ["Project Code", "Invoice Request", "AR Name", "Invoice Amount", "Currency", "Sales Remarks", "Status",
@@ -100,7 +109,7 @@ export function schemaSpec(rules) {
         "Status": T.select, "Submitted at": T.date, "Initiator department": T.text,
         "Contract Value": T.number, "Contract Value-Currency": T.select,
         "Attachment (Project Brief, Pitch Deck)": T.url,
-        "AM": T.user, "BD": T.user, "MKT": T.user, "Start date": T.date, "End date": T.date,
+        "AM": T.user, "BD": T.user, "Start date": T.date, "End date": T.date,   // (no MKT since Oct 2026)
         "IGNORE": T.checkbox,
         "Business Unit": T.select,
       },
@@ -115,6 +124,15 @@ export function schemaSpec(rules) {
         "Project": T.text, "Project Code": T.text, "AM": T.user, "PM (LEAD)": T.user, "MKT (PITCH)": T.user,
         "Business Unit": T.select, "Tools": T.multi, "TRIBE": T.select, "Event Start": T.date, "Event End": T.date,
       },
+      // Custom tags, only if rules.tags.tables lists ANDON (it doesn't: no Tags column there).
+      ...(tagsIn("andon") ? { optional: { [rules.tags.field]: T.text }, neededBy: { "tag:andon": [rules.tags.field] } } : {}),
+    },
+    variables: {
+      // Settings the team keeps in Lark, one row per value (RULES.tags). Every column is
+      // read; which two hold the name and the value is worked out from them (customTagsFrom).
+      read: "*",
+      optionalTable: true,   // if it can't be read, only the custom tags are off
+      fields: {},
     },
     par: {
       fields: {
@@ -239,15 +257,24 @@ export async function loadEverything(call, tables, rules, onProgress) {
   const keys = Object.keys(spec);
   const fields = {}, data = {}, columns = {}, tableProblems = {}, kindProblems = {};
   await Promise.all(keys.filter(k => tables[k]).map(async (k) => {
-    fields[k] = await loadFields(call, tables[k]);
-    tableProblems[k] = checkSchema(k, fields[k], spec[k]);
-    for (const [kind, list] of Object.entries(checkNeeded(k, fields[k], spec[k]))) {
-      kindProblems[kind] = [...(kindProblems[kind] || []), ...list];
+    try {
+      fields[k] = await loadFields(call, tables[k]);
+      tableProblems[k] = checkSchema(k, fields[k], spec[k]);
+      for (const [kind, list] of Object.entries(checkNeeded(k, fields[k], spec[k]))) {
+        kindProblems[kind] = [...(kindProblems[kind] || []), ...list];
+      }
+      const want = columnsToRead(k, fields[k], rules);
+      columns[k] = want || null;      // null: every column
+      data[k] = await loadRecords(call, tables[k], want, (n, total) => onProgress && onProgress(k, n, total));
+    } catch (e) {
+      // A table only some features use (spec.optionalTable: the Variables) can't stop
+      // the page: its features are off, and Settings says why. A dead login still ends it.
+      if (!spec[k].optionalTable || (e && e.deadToken)) throw e;
+      fields[k] = []; data[k] = null;
+      tableProblems[k] = [`${TABLE_TITLES[k]}: couldn't be read (${(e && e.message) || "error"}).`];
     }
-    const want = columnsToRead(k, fields[k], rules);
-    columns[k] = want || null;      // null: every column
-    data[k] = await loadRecords(call, tables[k], want, (n, total) => onProgress && onProgress(k, n, total));
   }));
+  for (const k of Object.keys(data)) if (data[k] === null) delete data[k];
   // `problems`: every table; `tableProblems`: by table, so a broken ANDON only stops ANDON
   // pushes; `kindProblems`: columns only one kind of push needs.
   return { fields, problems: [...Object.values(tableProblems).flat(), ...Object.values(kindProblems).flat()],
@@ -458,6 +485,31 @@ export async function saveEdit(call, t, recordId, write, loaded, defs) {
     readBackError = e;
   }
   return { recordId, written: write, record, mismatches, readBackError };
+}
+
+/* Mark a row with a custom tag (add = true) or take it off. The Tags cell is plain
+   text, so the row is re-read first and the tag added to (or taken out of) what's
+   there NOW: tags someone else added meanwhile stay. If the cell already says so,
+   nothing is written. Then it writes and reads back.
+   Resolves { recordId, written, unchanged, mismatches, readBackError }. */
+export async function setTag(call, t, recordId, field, tag, add) {
+  const now = await findRecord(call, t, recordId);
+  if (!now) throw Object.assign(new Error("gone"), { userMessage: "That row isn't in Lark any more." });
+  const before = (now.fields || {})[field];
+  const after = add ? tagsWith(before, tag) : tagsWithout(before, tag);
+  if ((after || "") === clean(before)) return { recordId, written: { [field]: after }, unchanged: true, mismatches: [], readBackError: null };
+  const written = { [field]: after };
+  await updateRecord(call, t, recordId, written);
+  return { recordId, written, unchanged: false, ...await readBack(call, t, recordId, written) };
+}
+
+/* Settings > Custom tags: add a value to the Variables table (one new row), or delete
+   that row. `cols` = which columns hold the name and the value (variableColumns). */
+export async function addVariable(call, t, cols, name, value) {
+  return createRecord(call, t, { [cols.name]: name, [cols.value]: value }, newClientToken());
+}
+export async function deleteVariable(call, t, recordId) {
+  await call("POST", `${tableUrl(t)}/records/batch_delete`, { records: [recordId] });
 }
 
 /* Tick (or untick) a source row's IGNORE box, then confirm it stuck. */

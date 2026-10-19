@@ -37,8 +37,13 @@ export function createQueue(ctx, inbox) {
   const waiting = () => Q.items.filter(it => LISTED.includes(it.state));
   const failed = () => Q.items.filter(it => it.state === "failed");
   // A row edit isn't in a list: its "card" is the row, as long as the table still has it.
-  const findCard = (it) => (it.kind === "edit" ? inbox.editCard(it.cardId)
-    : ((S.lists && S.lists[it.kind]) || { cards: [] }).cards.find(c => c.id === it.cardId && (c.step || "") === (it.step || "")));
+  // An audit card marked with a custom tag is in its tag's group, not the list.
+  const findCard = (it) => {
+    if (it.kind === "edit") return inbox.editCard(it.cardId);
+    const list = (S.lists && S.lists[it.kind]) || { cards: [] };
+    return [...list.cards, ...(list.tagged || []).flatMap(g => g.cards)]
+      .find(c => c.id === it.cardId && (c.step || "") === (it.step || ""));
+  };
 
   /* ---------------------------------------------------------------- adding */
   function add(c, job, entry) {

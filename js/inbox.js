@@ -3,13 +3,14 @@
 
 import { RULES, LARK } from "./config.js";
 import { TABLE_TITLES, pushBrief, pushPar, pushCollections, pushAndon, setIgnore, newClientToken, writableOnly, fillGaps,
-         saveEdit, findRecord } from "./ops.js";
+         saveEdit, findRecord, setTag } from "./ops.js";
 import {
   universeFromBrief, collectionsChange, stepStatus, parAfterAdding, defaultVat, vatMentions,
   people, andonFromBrief, auditPatch, auditMissing, auditFilesMissing, monthOf, clean, editChanges, editWrite,
+  tagsWith, tagsWithout,
 } from "./sync.js";
 import { uploadSizeProblem } from "./errors.js";
-import { $, h, ic, toast, fmt, flash, copyable, store, collapse, busy, radioKeys } from "./ui.js";
+import { $, h, ic, toast, fmt, flash, copyable, store, collapse, busy, radioKeys, openMenu } from "./ui.js";
 import { copyableText, dateField } from "./polaris-ui.js";
 import { createRowDoc } from "./rowdoc.js";
 import { describe, isDeadToken, isUncertain, uploadToBase } from "./net.js";
@@ -94,7 +95,7 @@ export function createInbox(ctx) {
   function matches(c, q) {
     if (!q) return true;
     const am = c.am ? c.am.map(u => u.name).join(" ") : "";
-    const extra = c.kind === "audit" ? `${c.target} ${c.gaps.join(" ")}` : "";
+    const extra = c.kind === "audit" ? `${c.target} ${c.gaps.join(" ")} ${c.tag || ""}` : "";
     return `${c.code} ${c.name} ${c.requestNo} ${c.status} ${am} ${extra}`.toLowerCase().includes(q.toLowerCase().trim());
   }
 
@@ -123,6 +124,7 @@ export function createInbox(ctx) {
           andon: "Every brief is in ANDON. Nice work!",
           audit: "Nothing in the Universe or ANDON has blanks to fill. Nice work!" }[S.tab];
     hiddenNote.textContent = hiddenSummary(list.hidden);
+    renderTagGroups(list, q);
     S.entering.clear();
     if (S.flashCard) {
       const el = box.querySelector(`[data-id="${S.flashCard}"]`);
@@ -324,6 +326,7 @@ export function createInbox(ctx) {
       h("div", { class: "item-head" },
         copyable(c.code, { label: "project code", cls: "code" }),
         h("span", { class: "badge badge-info" }, AUDIT_WHERE[c.target]),
+        c.tag ? h("span", { class: "badge badge-tag" }, ic("pin"), c.tag) : null,
         h("span", { class: "item-date" }, c.submittedAt ? `Brief ${fmt.day(c.submittedAt)}` : "")),
       h("h3", null, c.name || "(no name)"),
       // "…that the brief can fill" only when it can fill all of them (Sign Date, Month and the signed CE it never has).
@@ -334,9 +337,98 @@ export function createInbox(ctx) {
       h("ul", { class: "notes" }, h("li", { class: "flow" }, h("span", { class: "flow-row" }, "Missing"),
         h("span", { class: "flow-step" }, c.gaps.join(" · ")))),
       h("div", { class: "item-actions" },
-        h("button", { type: "button", class: "btn btn-ghost", title: "Hides this card on this device until another cell goes blank",
-          onclick: (e) => hideAudit(c, true, e.currentTarget) }, "Hide"),
+        c.tag
+          ? h("button", { type: "button", class: "btn btn-ghost", disabled: !ctx.canWriteFor(`tag:${c.target}`),
+              title: `Takes “${c.tag}” off this row, so it's back in the list (for everyone)`,
+              onclick: (e) => markTag(c, c.tag, false, e.currentTarget) }, "Unmark")
+          : !RULES.tags.tables.includes(c.target)
+          // A table without custom tags (ANDON): Hide is just "on this device", as it always was.
+          ? h("button", { type: "button", class: "btn btn-ghost", title: "Hides this card on this device until another cell goes blank",
+              onclick: (e) => hideAudit(c, true, e.currentTarget) }, "Hide")
+          : h("button", { type: "button", class: "btn btn-ghost hide-btn", "aria-haspopup": "menu", "aria-expanded": "false",
+              title: "Mark it with a tag (for everyone), or hide it on this device",
+              onclick: (e) => hideMenu(c, e.currentTarget) }, "Hide", ic("caret")),
         h("button", { type: "button", class: "btn btn-tonal", disabled: !writable, onclick: () => openSheet(c) }, "Fill")));
+  }
+
+  /* Under Hide: "Mark as …" for each custom tag (Settings > Custom tags), written to
+     the row's Tags cell so the card leaves everyone's list, and "Hide on this device". */
+  function hideMenu(c, btn) {
+    const canTag = ctx.canWriteFor(`tag:${c.target}`);
+    const items = canTag ? S.customTags.map(t => ({ label: `Mark as ${t.tag}`, icon: "pin",
+      onSelect: () => markTag(c, t.tag, true, btn) })) : [];
+    if (!canTag && S.customTags.length) {
+      items.push({ label: "Why no “Mark as …”?", icon: "info", onSelect: () => toast(`Marking needs a “${RULES.tags.field}” column in ${AUDIT_WHERE[c.target]}.`,
+        { detail: ctx.problemsFor(`tag:${c.target}`)[0] || "Your login can only read the tables. Log in again to allow it.", timeout: 0 }) });
+    }
+    if (!S.customTags.length) {
+      items.push({ label: "Add custom tags in Settings", icon: "gear", onSelect: () => { location.hash = "#/settings"; } });
+    }
+    items.push("-", { label: "Hide on this device", icon: "eye", onSelect: () => hideAudit(c, true, btn) });
+    openMenu(items, { anchor: btn });
+  }
+
+  /* The tag groups at the bottom of the audit list: one per custom tag, folded until
+     opened (each remembers, until the page reloads). Search narrows them too. */
+  const tagOpen = new Set();
+  function renderTagGroups(list, q) {
+    const box = $("#tagGroups");
+    const groups = S.tab === "audit" && list.tagged ? list.tagged.map(g => ({ ...g, cards: g.cards.filter(c => !ctx.queue.hides(c) && matches(c, q)) }))
+      .filter(g => g.cards.length) : [];
+    box.hidden = !groups.length;
+    box.replaceChildren(...groups.map(g => {
+      const d = h("details", { class: "tag-group", "data-tag": g.tag, open: tagOpen.has(g.tag) || null },
+        h("summary", null, ic("caret"), ic("pin"), h("b", null, g.tag), h("span", { class: "group-n" }, String(g.cards.length)),
+          h("span", { class: "tag-hint" }, "marked, so not in the list above")),
+        h("div", { class: "cards" }, g.cards.map(cardEl)));
+      d.addEventListener("toggle", () => { if (d.open) tagOpen.add(g.tag); else tagOpen.delete(g.tag); });
+      return d;
+    }));
+  }
+
+  /* Mark a card's row with a custom tag, or take it off (Unmark, Undo). Instant, like
+     Ignore: the card moves at once, the write follows, and a refusal moves it back
+     with the reason. The tag is merged into what the Tags cell says in Lark then. */
+  async function markTag(c, tag, add, button) {
+    const key = `tag:${c.target}:${c.rowId}`;
+    if (S.working.has(key)) return;
+    const table = c.target, field = RULES.tags.field;
+    const rec = (S.data[table] || []).find(r => r.record_id === c.rowId);
+    if (!rec || !ctx.ensureTime()) return;
+    const before = rec.fields[field];
+    const apply = (v) => { rec.fields[field] = v; ctx.recompute(); ctx.render(); };
+    if (button && button.closest) { const el = button.closest(".item"); if (el) await collapse(el); }
+    if (add) tagOpen.delete(tag); else { S.entering.add(c.id); S.flashCard = c.id; }
+    apply(add ? tagsWith(before, tag) : tagsWithout(before, tag));
+    const closeToast = toast(add ? `Marked ${c.code} as ${tag}.` : `Took “${tag}” off ${c.code}.`, {
+      action: "Undo", onAction: () => markTag(c, tag, !add),
+      detail: add ? `It's in the “${tag}” group at the bottom of the list, for everyone.` : "It's back in the list.",
+    });
+    S.working.add(key);
+    try {
+      const res = await ctx.track(() => setTag(ctx.call, ctx.tables[table], c.rowId, field, tag, add));
+      apply(res.written[field]);           // what Lark holds now (other people's tags included)
+      if (res.readBackError || (res.mismatches && res.mismatches.length)) {
+        toast(`Lark didn't confirm the tag on ${c.code}.`, { type: "warn", timeout: 0,
+          detail: `Check its ${field} cell in Lark.`, link: { href: ctx.tables[table].url, text: "Open in Lark" } });
+      }
+    } catch (err) {
+      closeToast();
+      if (isDeadToken(err)) { rec.fields[field] = before; return; }
+      if (isUncertain(err)) {
+        toast(`Polaris couldn't confirm the tag on ${c.code}.`, { type: "warn", timeout: 0,
+          detail: "The list refreshed to show what Lark has. Check it before trying again.",
+          link: { href: ctx.tables[table].url, text: "Open in Lark" } });
+        ctx.loadData({ quiet: true });
+        return;
+      }
+      apply(before);
+      toast(`Couldn't ${add ? `mark ${c.code} as ${tag}` : `take “${tag}” off ${c.code}`}.`, {
+        type: "error", detail: describe(err), action: "Try again", onAction: () => markTag(c, tag, add),
+      });
+    } finally {
+      S.working.delete(key);
+    }
   }
 
   /* Hide (or bring back) an audit card on this device: nothing is written to Lark. */
@@ -364,7 +456,7 @@ export function createInbox(ctx) {
     const AMOUNT = "Amount (VAT-Ex.) (PHP)";
     // Names for the people in the row beside the sheet (the brief's, plus anyone picked here).
     ch.names = ch.names || new Map();
-    if (c.brief) for (const f of ["AM", "MKT", "BD"]) people(c.brief.record.fields[f]).forEach(u => ch.names.set(u.id, u.name));
+    if (c.brief) for (const f of ["AM", "BD"]) people(c.brief.record.fields[f]).forEach(u => ch.names.set(u.id, u.name));
     const fromBrief = () => auditPatch(c, row, { fields: c.gaps, vat: ch.vat }, RULES, opts);
     if (!ch.values) ch.values = { ...fromBrief() };
     ch.edited = ch.edited || [];

@@ -168,6 +168,8 @@
         <div class="loader" id="loader" hidden></div>
         <div class="cards" id="cards"></div>
         <p class="empty small" id="emptyNote" hidden></p>
+        <!-- Audit cards marked with a custom tag, one group per tag (js/inbox.js) -->
+        <div class="tag-groups" id="tagGroups" hidden></div>
         <p class="hidden-note" id="hiddenNote"></p>
       </section>
 
@@ -299,6 +301,12 @@
               <button type="button" class="btn btn-ghost" id="proxyReset">Use the hosted service</button>
             </div>
           </details>
+        </section>
+
+        <section class="card set-card" aria-labelledby="tagsTitle">
+          <h2 id="tagsTitle">Custom tags</h2>
+          <p class="set-sub">Shown under <b>Hide</b> on audit cards as “Mark as …”. Marking writes the tag into the row's Tags column, so the card moves to that tag's group at the bottom of the Audit list, for everyone. Kept in the Variables table in Lark.</p>
+          <div id="tagsBox"></div>
         </section>
 
         <section class="card set-card" aria-labelledby="localTitle">

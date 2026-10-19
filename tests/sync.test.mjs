@@ -12,6 +12,7 @@ import {
   auditCards, auditPatch, parseDay, fillPlan, invoiceChangedSince, draftsToJSON, draftsFromJSON, queueToJSON, queueFromJSON, cellText, isWonProject, auditMissing, monthOf,
   needsSignedCe, auditFilesMissing, isBlank,
   matchesQuery, andonView, canEditField, editChanges, editWrite, editCheck, editKey, writeValueOf,
+  tagsOf, tagsWith, tagsWithout, variableColumns, customTagsFrom, customTagOf, tagGroups,
 } from "../js/sync.js";
 import { writableOnly } from "../js/ops.js";
 
@@ -370,9 +371,10 @@ test("the BD picker offers frequent Universe BDs first", () => {
     rec("u1", { "BD": [user("ou_kirk", "Kirk")], "AM": [user("ou_pat", "Pat")] }),
     rec("u2", { "BD": [user("ou_kirk", "Kirk"), user("ou_ella", "Ella")] }),
   ];
+  // (an old brief that still has MKT: the brief has no MKT column now, so it's not read)
   const b = [rec("b1", { "MKT": [user("ou_mkt", "Mika")], "BD": [user("ou_ella", "Ella")] })];
   const pool = peoplePool(u, b);
-  assert.deepEqual(pool.map(p => [p.name, p.bdCount]), [["Kirk", 2], ["Ella", 1], ["Mika", 0], ["Pat", 0]]);
+  assert.deepEqual(pool.map(p => [p.name, p.bdCount]), [["Kirk", 2], ["Ella", 1], ["Pat", 0]]);
   assert.equal(pool[0].email, "ou_kirk@x.com");
 });
 
@@ -463,7 +465,7 @@ test("ANDON: briefs from every department, the shared IGNORE box, typed columns 
   assert.deepEqual(out, {
     "Project": "Korea Tourism Expo", "Project Code": "2026TEG-P0286",
     "AM": [{ id: "ou_am1" }],                      // ANDON holds one AM
-    "PM (LEAD)": [{ id: "ou_pm" }], "MKT (PITCH)": [{ id: "ou_mkt" }],
+    "PM (LEAD)": [{ id: "ou_pm" }],                // no MKT (PITCH): the brief has no MKT column now
     "Business Unit": "PDEI - Marketing", "Tools": ["None"],     // unknown options are left out
     "TRIBE": "TRIBE D - Marketing",
     "Brief Contract Value": 5700, "Brief Currency": ["PHP"], "Contract Value (USD)": 100,
@@ -539,19 +541,20 @@ test("audit: Universe blanks the brief can fill, never cells that have a value",
   const c = cards[0];
   assert.equal(c.brief.requestNo, "202601050001");             // newest brief that wasn't withdrawn
   // Filled: blank cells only. Project, AM and Year have values; Client, BD, Status… are never audited.
-  assert.deepEqual(c.gaps, ["MKT", "Amount (VAT-Ex.) (PHP)", "Project Description", "Project Start", "Project End", "RFP Received Date"]);
+  // (not MKT: the brief has no MKT column now, so it can't fill one, even if an old brief record says so)
+  assert.deepEqual(c.gaps, ["Amount (VAT-Ex.) (PHP)", "Project Description", "Project Start", "Project End", "RFP Received Date"]);
   assert.equal(c.needsVat, true);
   const all = auditPatch(c, rows[0], { vat: "12%" }, RULES);
   assert.equal(all["Amount (VAT-Ex.) (PHP)"], 1000000);
   assert.equal(all["VAT%"], "12%");                              // written with the amount, since the row had none
   assert.equal(all["Project Description"], "Three-day event.");
-  assert.deepEqual(all["MKT"], [{ id: "ou_mk" }]);
+  assert.ok(!("MKT" in all));
   assert.ok(!("AM" in all) && !("Project" in all) && !("Year" in all) && !("Status" in all));
   // Only the ticked ones; no VAT% without the amount.
   assert.deepEqual(auditPatch(c, rows[0], { fields: ["Project End"], vat: "0%" }, RULES), { "Project End": 1790300000000 });
   // Hidden on this device until another cell goes blank.
   assert.equal(auditCards("universe", rows, [b], RULES, { hide: new Set([c.hideKey]) }).cards.length, 0);
-  assert.equal(auditCards("universe", [rec("uX", { ...rows[0].fields, "MKT": [] , "Project": null })], [b], RULES,
+  assert.equal(auditCards("universe", [rec("uX", { ...rows[0].fields, "Project": null })], [b], RULES,
     { hide: new Set([c.hideKey]) }).cards.length, 1);
 });
 
@@ -594,18 +597,20 @@ test("typed dates become midnight Manila; anything else is flagged", () => {
 
 test("audit: values edited in the sheet are written instead of the brief's; blanks never are", () => {
   const b = rec("recBE", { "Request No.": url("202601050003"), "Project Code": seg("2026TEG-P0603"), "Project Name": seg("Edit Me"),
-    "Status": "Approved", "Submitted at": 1, "Remarks": seg("Old remarks."), "MKT": [user("ou_m", "Old Mkt")],
+    "Status": "Approved", "Submitted at": 1, "Remarks": seg("Old remarks."), "AM": [user("ou_m", "Old Am")],
     "Start date": 10, "End date": 20, "Contract Value": 112, "Contract Value-Currency": "PHP" });
   const row = rec("uE2", { "Project Code": seg("2026TEG-P0603"), "Project": seg("Edit Me"), "VAT%": "12%" });
   const c = auditCards("universe", [row], [b], RULES).cards[0];
   const p = auditPatch(c, row, { values: {
     "Project Description": "  New remarks.\r\n",          // edited: trimmed, Windows line ends fixed
-    "MKT": [{ id: "ou_new" }],                             // a different person
+    "AM": [{ id: "ou_new" }],                              // a different person
+    "MKT": [{ id: "ou_x" }],                               // not a gap (the brief has no MKT): never written
     "Project End": null,                                   // cleared: not written
     "Amount (VAT-Ex.) (PHP)": 250,                         // typed over the brief's
   } }, RULES);
   assert.equal(p["Project Description"], "New remarks.");
-  assert.deepEqual(p["MKT"], [{ id: "ou_new" }]);
+  assert.deepEqual(p["AM"], [{ id: "ou_new" }]);
+  assert.ok(!("MKT" in p));
   assert.ok(!("Project End" in p));
   assert.equal(p["Amount (VAT-Ex.) (PHP)"], 250);
   assert.equal(p["Project Start"], 10);                    // not edited: from the brief
@@ -951,4 +956,52 @@ test("row editor: a cell someone else changed meanwhile stops the write; one alr
   // someone made the same change: not a conflict; all of it there already: done
   assert.deepEqual(editCheck(write, EDIT_DEFS, LOADED, { ...LOADED, "Amount": 2000 }), { stale: [], done: false });
   assert.equal(editCheck(write, EDIT_DEFS, LOADED, { ...LOADED, "Project": seg("Lumen Festival"), "Amount": 2000 }).done, true);
+});
+
+/* ---------- custom tags ---------- */
+
+test("tags: a Tags cell is comma-separated text; adding and removing keep the other tags", () => {
+  assert.deepEqual(tagsOf(seg(" No Revenue,Hidden , no revenue,, ")), ["No Revenue", "Hidden"]);   // trimmed, once each (any case)
+  assert.deepEqual(tagsOf(null), []);
+  assert.equal(tagsWith(seg("Client A"), "No Revenue"), "Client A, No Revenue");
+  assert.equal(tagsWith(seg("no revenue"), "No Revenue"), "no revenue");                         // already there: unchanged
+  assert.equal(tagsWith(null, "Hidden"), "Hidden");
+  assert.equal(tagsWithout(seg("Client A, No Revenue"), "no revenue"), "Client A");
+  assert.equal(tagsWithout(seg("Hidden"), "Hidden"), null);                                      // nothing left: an empty cell
+});
+
+test("tags: the custom tags come from the Variables table, whatever its columns are called", () => {
+  const rows = [rec("v1", { "Variable": seg("custom_tag"), "Value": seg("No Revenue") }),
+                rec("v2", { "Variable": seg("custom_tag"), "Value": seg("Hidden") }),
+                rec("v3", { "Variable": seg("usd_rate"), "Value": seg("57") }),
+                rec("v4", { "Variable": seg("custom_tag"), "Value": seg("hidden") }),   // a repeat (any case): once
+                rec("v5", { "Variable": seg("custom_tag"), "Value": seg("") })];
+  const f = (field_name, type = 1) => ({ field_name, type });
+  const cols = variableColumns([f("Variable"), f("Value")], rows, RULES.tags);
+  assert.deepEqual(cols, { name: "Variable", value: "Value" });
+  assert.deepEqual(customTagsFrom(rows, cols, "custom_tag"), [{ tag: "No Revenue", id: "v1" }, { tag: "Hidden", id: "v2" }]);
+  // other names: found by where "custom_tag" is
+  const other = rows.map(r => rec(r.record_id, { "Key": r.fields["Variable"], "Notes": seg(""), "Values": r.fields["Value"] }));
+  assert.deepEqual(variableColumns([f("Key"), f("Notes"), f("Values")], other, RULES.tags), { name: "Key", value: "Values" });
+  assert.equal(variableColumns([f("A"), f("B")], [rec("x", { "A": seg("nope") })], RULES.tags), null);
+  assert.deepEqual(customTagsFrom(rows, null, "custom_tag"), []);
+});
+
+test("tags: a marked row leaves the audit list for its tag's group", () => {
+  const cols = ["Project Code", "Project", "Status", "Sign Date", "Month", RULES.auditFiles.field, "Tags"].map(field_name => ({ field_name, type: 1 }));
+  const won = { "Status": "Signed CE" };   // blank Sign Date, Month and signed CE: an audit card
+  const rows = [
+    rec("t1", { "Project Code": seg("2026TEG-P0901"), "Project": seg("Free event"), ...won, "Tags": seg("Client A, no revenue") }),
+    rec("t2", { "Project Code": seg("2026TEG-P0902"), "Project": seg("Parked"), ...won, "Tags": seg("Hidden") }),
+    rec("t3", { "Project Code": seg("2026TEG-P0903"), "Project": seg("Normal"), ...won, "Tags": seg("Client A") }),
+  ];
+  const tags = ["No Revenue", "Hidden"];
+  const res = auditCards("universe", rows, [], RULES, { fields: cols, tags, tagField: "Tags", hide: new Set() });
+  assert.deepEqual(res.cards.map(c => c.rowId), ["t3"]);                    // a tag that isn't a custom tag doesn't count
+  assert.deepEqual(res.tagged.map(c => [c.rowId, c.tag]), [["t1", "No Revenue"], ["t2", "Hidden"]]);   // the tag's own spelling
+  assert.equal(customTagOf(rows[1].fields, "Tags", tags), "Hidden");
+  // groups in the tags' order; empty ones left out
+  assert.deepEqual(tagGroups(res.tagged, ["Hidden", "Gone", "No Revenue"]).map(g => [g.tag, g.cards.length]), [["Hidden", 1], ["No Revenue", 1]]);
+  // no custom tags (or no Tags column): everything stays in the list
+  assert.equal(auditCards("universe", rows, [], RULES, { fields: cols, tags: [], tagField: "Tags" }).cards.length, 3);
 });

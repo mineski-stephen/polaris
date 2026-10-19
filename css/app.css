@@ -116,6 +116,33 @@ main { padding-bottom: 120px; }
 /* a row still waiting for its invoice number */
 .icon-btn.is-todo { background: var(--brand-soft); border-color: transparent; color: var(--on-brand-soft); }
 
+/* ---- custom tags: Hide ▾ on audit cards, the tag groups, Settings > Custom tags ---- */
+.hide-btn { gap: 4px; }
+.hide-btn .i { width: 16px; height: 16px; transition: transform .15s var(--ease); }
+.hide-btn[aria-expanded="true"] .i { transform: rotate(180deg); }
+.badge-tag { display: inline-flex; align-items: center; gap: 4px; background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--line); }
+.badge-tag .i { width: 12px; height: 12px; }
+.tag-groups { display: flex; flex-direction: column; gap: 10px; margin-top: 22px; padding-top: 16px; border-top: 1px dashed var(--line-2); }
+.tag-group > summary { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px;
+                       background: var(--surface); cursor: pointer; list-style: none; font-size: 14px; }
+.tag-group > summary::-webkit-details-marker { display: none; }
+.tag-group > summary:hover { background: var(--surface-2); }
+.tag-group > summary:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--focus); }
+.tag-group > summary .i { width: 16px; height: 16px; color: var(--muted); flex: none; }
+.tag-group > summary > .i:first-child { transform: rotate(-90deg); transition: transform .15s var(--ease); }
+.tag-group[open] > summary > .i:first-child { transform: none; }
+.tag-group .group-n { color: var(--muted); font-weight: 700; }
+.tag-group .tag-hint { margin-left: auto; font-size: 12px; color: var(--muted); }
+.tag-group > .cards { margin-top: 10px; }
+.tag-group .item { opacity: .92; }
+.tag-list { list-style: none; margin: 4px 0 12px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.tag-list li { display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
+.tag-list li .i { width: 15px; height: 15px; color: var(--muted); }
+.tag-list li.is-empty { color: var(--muted); border-style: dashed; background: none; }
+.tag-list .tag-n { margin-left: auto; font-size: 12.5px; color: var(--muted); }
+.tag-add { display: flex; gap: 8px; }
+.tag-add input { flex: 1; min-width: 0; }
+
 /* ---- the audit: each blank, ticked or not, with an editor ---------------------- */
 .gaps { display: flex; flex-direction: column; gap: 10px; }
 .gap { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px;

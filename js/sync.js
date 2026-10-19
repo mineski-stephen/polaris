@@ -347,7 +347,7 @@ export function universeFromBrief(card, choices, rules) {
   put("Client", (choices.client || "").trim());
   put("AM", userRefs(people(f["AM"])));
   put("BD", userRefs(choices.bd || []));
-  put("MKT", userRefs(people(f["MKT"])));
+  // (MKT isn't on the Project Brief any more, so a new row's MKT starts blank)
   const amount = vatExAmount(card.value, card.currency, choices.vat, rules);
   put("Amount (VAT-Ex.) (PHP)", amount);
   if (amount !== null) put("VAT%", choices.vat);
@@ -381,7 +381,7 @@ export function andonFromBrief(card, choices, rules, options) {
   put("Project Code", card.code);
   put("AM", userRefs(people(f["AM"]).slice(0, 1)));                 // ANDON holds one AM
   put("PM (LEAD)", userRefs((choices.pm || []).slice(0, 1)));
-  put("MKT (PITCH)", userRefs(people(f["MKT"])));
+  // (MKT (PITCH) stays blank: the Project Brief has no MKT column any more)
   put("Business Unit", opt("Business Unit", clean(f["Business Unit"])));
   put("Tools", (Array.isArray(f["Required Tools"]) ? f["Required Tools"] : [])
     .map(t => opt("Tools", t)).filter(Boolean));
@@ -420,7 +420,7 @@ export function peoplePool(universe, briefs) {
   for (const r of universe) { const f = r.fields || {}; add(people(f["BD"]), true); add(people(f["AM"]), false); }
   for (const r of briefs) {
     const f = r.fields || {};
-    for (const k of ["BD", "AM", "MKT"]) add(people(f[k]), false);
+    for (const k of ["BD", "AM"]) add(people(f[k]), false);
   }
   return [...pool.values()].sort((a, b) => b.bdCount - a.bdCount || a.name.localeCompare(b.name));
 }
@@ -550,6 +550,65 @@ export function auditFilesMissing(card, choices) {
   return (card.files || []).filter(k => pick.includes(k) && !files);
 }
 
+/* ======================= custom tags ("Mark as No Revenue") =======================
+   A row's tags live in one plain-text column, separated by commas ("No Revenue,
+   Hidden"). The custom tags themselves are rows of the Variables table. */
+
+/* The tags in a Tags cell, trimmed, each once (compared without case). */
+export function tagsOf(v) {
+  const out = [];
+  for (const t of clean(v).split(/[,\n;]+/).map(x => x.trim()).filter(Boolean)) {
+    if (!out.some(x => x.toLowerCase() === t.toLowerCase())) out.push(t);
+  }
+  return out;
+}
+const hasTag = (list, tag) => list.some(x => x.toLowerCase() === String(tag).trim().toLowerCase());
+/* The cell with `tag` added (at the end; the cell's other tags kept as they are). */
+export function tagsWith(v, tag) {
+  const list = tagsOf(v);
+  return (hasTag(list, tag) ? list : [...list, String(tag).trim()]).join(", ");
+}
+/* The cell with `tag` taken out (null when nothing's left). */
+export function tagsWithout(v, tag) {
+  const list = tagsOf(v).filter(x => x.toLowerCase() !== String(tag).trim().toLowerCase());
+  return list.length ? list.join(", ") : null;
+}
+
+/* Which Variables columns hold the variable's name and its value. The configured
+   names (rules.tags.nameColumn / valueColumn) if the table has them; otherwise the
+   column where some row says `variable` ("custom_tag") is the name, and the value is
+   a column called "Value", or else the first other text column. Null if neither. */
+export function variableColumns(fields, records, cfg) {
+  const names = (fields || []).map(f => f.field_name);
+  if (names.includes(cfg.nameColumn) && names.includes(cfg.valueColumn)) return { name: cfg.nameColumn, value: cfg.valueColumn };
+  const want = cfg.variable.toLowerCase();
+  const name = names.find(n => (records || []).some(r => clean((r.fields || {})[n]).toLowerCase() === want));
+  if (!name) return null;
+  const texty = (fields || []).filter(f => f.field_name !== name && [1, 3].includes(f.type)).map(f => f.field_name);
+  const value = texty.find(n => n === cfg.valueColumn) || texty.find(n => /^values?$/i.test(n)) || texty[0];
+  return value ? { name, value } : null;
+}
+
+/* The custom tags, in the table's order: [{ tag, id }] (id = the Variables row). */
+export function customTagsFrom(records, cols, variable) {
+  if (!cols) return [];
+  const out = [];
+  for (const r of records || []) {
+    const f = r.fields || {};
+    if (clean(f[cols.name]).toLowerCase() !== variable.toLowerCase()) continue;
+    const tag = clean(f[cols.value]);
+    if (tag && !out.some(x => x.tag.toLowerCase() === tag.toLowerCase())) out.push({ tag, id: r.record_id });
+  }
+  return out;
+}
+
+/* The custom tag a row is marked with (the first, in the custom tags' order), or null. */
+export function customTagOf(fields, tagField, tags) {
+  const mine = tagsOf((fields || {})[tagField]);
+  const hit = (tags || []).find(t => hasTag(mine, t));
+  return hit || null;
+}
+
 /* Every row in `records` (Universe or ANDON, `target`) with gaps its brief can
    fill, and, in the Universe, every won project missing a required column
    (`required`, filled by a person; such a row gets a card even without a brief),
@@ -557,11 +616,12 @@ export function auditFilesMissing(card, choices) {
    person; also without a brief).
    `hide` = keys of cards hidden on this device. `options`/`fields` = the table's
    select options and columns (only typed columns are ever written; a required
-   column the table doesn't have isn't asked for).
-   Returns { cards, hidden: { noBrief, hidden } }. */
-export function auditCards(target, records, briefs, rules, { hide = new Set(), options, fields, byCode } = {}) {
+   column the table doesn't have isn't asked for). `tags` = the custom tags: a row
+   marked with one (in `tagField`) leaves the list for `tagged`, card.tag saying which.
+   Returns { cards, tagged, hidden: { noBrief, hidden } }. */
+export function auditCards(target, records, briefs, rules, { hide = new Set(), options, fields, byCode, tags = [], tagField } = {}) {
   const briefFor = byCode || briefsByCode(briefs, rules);
-  const cards = [], hidden = { noBrief: 0, hidden: 0 };
+  const cards = [], tagged = [], hidden = { noBrief: 0, hidden: 0 };
   const seen = new Set();
   for (const row of records) {
     const f = row.fields || {};
@@ -591,11 +651,22 @@ export function auditCards(target, records, briefs, rules, { hide = new Set(), o
       notes: [], blocked: "",
     };
     card.hideKey = `${id}|${gaps.join(",")}`;
+    // Marked with a custom tag: it goes to that tag's group (shared, unlike Hide).
+    const tag = tagField && tags.length ? customTagOf(f, tagField, tags) : null;
+    if (tag) { card.tag = tag; tagged.push(card); continue; }
     if (hide.has(card.hideKey)) { hidden.hidden++; continue; }
     cards.push(card);
   }
   cards.sort(bySubmittedDesc);
-  return { cards, hidden };
+  tagged.sort(bySubmittedDesc);
+  return { cards, tagged, hidden };
+}
+
+/* The tagged cards of every table, one group per custom tag (in the tags' order,
+   empty ones left out): [{ tag, cards }]. */
+export function tagGroups(tagged, tags) {
+  return (tags || []).map(tag => ({ tag, cards: tagged.filter(c => c.tag === tag).sort(bySubmittedDesc) }))
+    .filter(g => g.cards.length);
 }
 
 /* The cells a push writes: the chosen gaps (`choices.fields`, default all),

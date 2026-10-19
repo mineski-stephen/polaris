@@ -3,12 +3,12 @@
    transfer rules in sync.js and every Lark read/write in ops.js. */
 
 import { APP, ENV_LABEL, TABLE_LINKS, RULES, SERVICES } from "./config.js";
-import { parseBaseLink, loadEverything, selectOptions, TABLE_TITLES, computedTypes } from "./ops.js";
+import { parseBaseLink, loadEverything, selectOptions, TABLE_TITLES, computedTypes, addVariable, deleteVariable } from "./ops.js";
 import {
   indexUniverse, indexCollections, briefCards, parCards, collectionCards, stepStatus, peoplePool, pmPool, auditCards, briefsByCode,
-  draftsToJSON, draftsFromJSON,
+  draftsToJSON, draftsFromJSON, variableColumns, customTagsFrom, tagGroups, tagsOf,
 } from "./sync.js";
-import { $, $$, h, ic, fillIcons, toast, fmt, store, recall, sleep, initTheme, openMenu } from "./ui.js";
+import { $, $$, h, ic, fillIcons, toast, fmt, store, recall, sleep, initTheme, openMenu, confirmSheet, busy } from "./ui.js";
 import { lark, wake, conn, onConn, describe, isDeadToken, LarkError, proxyHost, unreachable } from "./net.js";
 import { overrides, setLarkUrl, savedLarkUrl, isLocalPage, isServiceUrl } from "./settings.js";
 import * as auth from "./auth.js";
@@ -94,6 +94,8 @@ const TABLES_FOR = {
   audit: ["brief", "universe"], "audit:universe": ["brief", "universe"], "audit:andon": ["brief", "andon"],
   // The row editor writes to the one table the row is in.
   "edit:universe": ["universe"], "edit:collections": ["collections"], "edit:andon": ["andon"],
+  // "Mark as …" writes the row's Tags cell; Settings > Custom tags writes the Variables table.
+  "tag:universe": ["universe"], "tag:andon": ["andon"], variables: ["variables"],   // (tag:andon: only if RULES.tags.tables has it)
 };
 const problemsFor = (kind) => [...(TABLES_FOR[kind] || []).flatMap(t => S.tableProblems[t] || []),
                                 ...(S.kindProblems[kind] || [])];
@@ -385,11 +387,19 @@ function recompute() {
   }
   // The audit: Universe and ANDON cells left blank that the brief can fill.
   const byCode = briefsByCode(d.brief, RULES);
-  const uniAudit = auditCards("universe", d.universe, d.brief, RULES, { hide: S.auditHide, byCode, fields: fieldsOf("universe") });
+  // Custom tags (Settings > Custom tags), from the Variables table: a row marked with
+  // one leaves the audit list for that tag's group at the bottom.
+  S.tagCols = d.variables ? variableColumns(fieldsOf("variables"), d.variables, RULES.tags) : null;
+  S.customTags = customTagsFrom(d.variables, S.tagCols, RULES.tags.variable);
+  // (only in the tables RULES.tags.tables lists: ANDON has no Tags column)
+  const tagsFor = (t) => (RULES.tags.tables.includes(t) ? { tags: S.customTags.map(x => x.tag), tagField: RULES.tags.field } : {});
+  const uniAudit = auditCards("universe", d.universe, d.brief, RULES, { hide: S.auditHide, byCode, fields: fieldsOf("universe"), ...tagsFor("universe") });
   const andonAudit = d.andon ? auditCards("andon", d.andon, d.brief, RULES,
-    { hide: S.auditHide, byCode, options: ctx.optionsOf("andon"), fields: fieldsOf("andon") }) : { cards: [], hidden: { noBrief: 0, hidden: 0 } };
+    { hide: S.auditHide, byCode, options: ctx.optionsOf("andon"), fields: fieldsOf("andon"), ...tagsFor("andon") })
+    : { cards: [], tagged: [], hidden: { noBrief: 0, hidden: 0 } };
   S.lists.audit = {
     cards: [...uniAudit.cards, ...andonAudit.cards].sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0)),
+    tagged: tagGroups([...uniAudit.tagged, ...andonAudit.tagged], S.customTags.map(x => x.tag)),
     hidden: { hiddenHere: uniAudit.hidden.hidden + andonAudit.hidden.hidden },
   };
   S.pool = peoplePool(d.universe, d.brief);
@@ -540,7 +550,7 @@ function renderSettings() {
       t ? h("button", { type: "button", class: "btn btn-sm", disabled: S.loading, onclick: () => loadData({ quiet: !!S.data }) }, "Refresh") : null),
     ...Object.entries(tables).map(([k, tb]) => h("li", null,
       h("span", { class: "status-text" }, h("b", null, TABLE_TITLES[k]),
-        h("span", null, S.data ? `${S.data[k].length.toLocaleString()} rows` : tb.table)),
+        h("span", null, S.data ? (S.data[k] ? `${S.data[k].length.toLocaleString()} rows` : "Couldn't be read") : tb.table)),
       h("a", { class: "btn btn-sm btn-ghost", href: tb.url, target: "_blank", rel: "noopener" }, "Open in Lark", ic("external")))));
   $("#envNote").textContent = ENV_LABEL
     ? `Polaris is connected to the ${ENV_LABEL.toLowerCase()} tables. To go live, set APP.env in js/config.js.`
@@ -549,6 +559,98 @@ function renderSettings() {
   const input = $("#proxyInput");
   if (document.activeElement !== input) input.value = savedLarkUrl();
   input.placeholder = SERVICES.lark.url;
+  renderTags();
+}
+
+/* Settings > Custom tags: the Variables table's custom_tag rows, each with how many
+   rows are marked with it; add one (a new row) or remove one (its row is deleted;
+   rows marked with it keep the text in their Tags cell but come back into the list). */
+let tagBusy = false;
+function renderTags() {
+  const box = $("#tagsBox");
+  const note = (text, cls = "set-sub") => box.replaceChildren(h("p", { class: cls }, text));
+  if (!auth.currentToken()) return note("Log in to see and change the custom tags.");
+  if (!S.data) return note(S.loading ? "Loading…" : S.loadError ? describe(S.loadError) : "Not loaded yet.");
+  if (!tables.variables) return note("There's no Variables table in js/config.js (TABLES.variables).");
+  if (!S.data.variables) {
+    return box.replaceChildren(h("div", { class: "callout callout-err" }, ic("alert"),
+      h("div", null, (S.tableProblems.variables || [])[0] || "The Variables table couldn't be read.",
+        " Custom tags are off until it can be. Check your access to it in Lark, then Refresh.")));
+  }
+  const cfg = RULES.tags;
+  if (!S.tagCols) {
+    return box.replaceChildren(h("div", { class: "callout callout-warn" }, ic("alert"),
+      h("div", null, `Polaris couldn't find the custom tags in the Variables table. It looks for columns named “${cfg.nameColumn}” and “${cfg.valueColumn}”, or a column with “${cfg.variable}” in it.`)));
+  }
+  const canWrite = canWriteFor("variables");
+  const marked = (tag) => RULES.tags.tables.reduce((n, t) => n + (S.data[t] || [])
+    .filter(r => tagsOf((r.fields || {})[cfg.field]).some(x => x.toLowerCase() === tag.toLowerCase())).length, 0);
+  const list = h("ul", { class: "tag-list" }, S.customTags.length ? S.customTags.map(t => {
+    const n = marked(t.tag);
+    return h("li", null, ic("pin"), h("b", null, t.tag),
+      h("span", { class: "tag-n" }, n ? `${n.toLocaleString()} row${n === 1 ? "" : "s"} marked` : "not used yet"),
+      h("button", { type: "button", class: "icon-btn icon-sm", disabled: !canWrite || tagBusy, "aria-label": `Remove ${t.tag}`, title: "Remove this tag",
+        onclick: () => removeTag(t, n) }, ic("x")));
+  }) : [h("li", { class: "is-empty" }, "No custom tags yet.")]);
+  const input = h("input", { type: "text", id: "tagNew", autocomplete: "off", placeholder: "e.g. On Hold", maxlength: "60", disabled: !canWrite });
+  const add = h("button", { type: "submit", class: "btn btn-sm", disabled: !canWrite || tagBusy }, h("span", { class: "label" }, "Add tag"));
+  const err = h("p", { class: "form-error", role: "alert", hidden: true });
+  const form = h("form", { class: "tag-add" }, h("label", { class: "sr-only", for: "tagNew" }, "New custom tag"), input, add);
+  form.addEventListener("submit", (e) => { e.preventDefault(); addTag(input.value, err, add); });
+  // Settings re-renders as things land: keep what's being typed, and the focus.
+  const old = $("#tagNew");
+  if (old) { input.value = old.value; if (document.activeElement === old) queueMicrotask(() => input.focus()); }
+  // (replaceChildren would print a null as "null": leave it out instead)
+  box.replaceChildren(...[list, form, err,
+    canWrite ? null : h("p", { class: "set-sub" }, problemsFor("variables")[0] || "Your login can only read the tables. Log in again to change the tags.")].filter(Boolean));
+}
+
+async function addTag(raw, err, btn) {
+  const tag = String(raw || "").replace(/\s+/g, " ").trim();
+  const say = (m) => { err.textContent = m; err.hidden = !m; };
+  if (!tag) return say("Type the tag first.");
+  if (/[,;]/.test(tag)) return say("A tag can't have a comma or semicolon in it: the Tags column uses them to separate tags.");
+  if (S.customTags.some(t => t.tag.toLowerCase() === tag.toLowerCase())) return say(`“${tag}” is already a custom tag.`);
+  if (!ensureTime()) return;
+  say("");
+  tagBusy = true;
+  busy(btn, true, "Adding…");
+  try {
+    const rec = await track(() => addVariable(call, tables.variables, S.tagCols, RULES.tags.variable, tag));
+    S.data.variables.push({ record_id: rec.record_id, fields: { ...rec.fields, [S.tagCols.name]: RULES.tags.variable, [S.tagCols.value]: tag } });
+    recompute();
+    const field = $("#tagNew");
+    if (field) field.value = "";
+    toast(`Added “${tag}”.`, { type: "success", detail: `Audit cards now offer “Mark as ${tag}” under Hide.` });
+  } catch (e) {
+    if (isDeadToken(e)) return;
+    toast(`Couldn't add “${tag}”.`, { type: "error", timeout: 0, detail: describe(e) });
+  } finally {
+    tagBusy = false;
+    render();
+  }
+}
+
+async function removeTag(t, n) {
+  const ok = await confirmSheet({
+    title: `Remove “${t.tag}”?`, icon: "pin", danger: true, confirm: "Remove tag", busyText: "Removing…",
+    sub: "It comes off the Hide menu for everyone.",
+    body: h("p", null, n
+      ? `${n.toLocaleString()} row${n === 1 ? " is" : "s are"} marked “${t.tag}”. ${n === 1 ? "It goes" : "They go"} back into the Audit list (if ${n === 1 ? "it has" : "they have"} blanks). ${n === 1 ? "Its Tags cell isn't" : "Their Tags cells aren't"} changed, so adding “${t.tag}” again groups ${n === 1 ? "it" : "them"} again.`
+      : `No rows are marked “${t.tag}”.`),
+    run: async () => {
+      if (!ensureTime()) throw new Error("Your login is about to end. Log in again, then try it.");
+      try {
+        await track(() => deleteVariable(call, tables.variables, t.id));
+      } catch (e) {
+        throw new Error(isDeadToken(e) ? "Your login has ended. Log in again, then try it." : describe(e));
+      }
+      S.data.variables = S.data.variables.filter(r => r.record_id !== t.id);
+      recompute();
+    },
+  });
+  if (ok) toast(`Removed “${t.tag}”.`, { type: "success" });
+  render();
 }
 
 function sessionLine() {

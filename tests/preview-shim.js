@@ -97,6 +97,10 @@
       });
       return reply({ code: 0, data: { records: changed } }, 400);
     }
+    if (op === "/batch_delete" && method === "POST") {   // Settings > Custom tags: remove
+      f.records[key] = recs.filter(function (r) { return body.records.indexOf(r.record_id) < 0; });
+      return reply({ code: 0, data: { records: body.records.map(function (id) { return { record_id: id, deleted: true }; }) } }, 300);
+    }
     if (op === "" && method === "POST") {
       var rec = { record_id: "recPreview" + (++seq) + Date.now().toString(36), fields: toRead(f, key, body.fields) };
       recs.push(rec);

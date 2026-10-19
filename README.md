@@ -205,7 +205,7 @@ Empty values are never written, so nothing is blanked.
 | Project | Project Name |
 | Client | what you type in the sheet (blank if you leave it) |
 | BD | who you pick in the sheet (blank by default) |
-| AM, MKT | the brief's AM and MKT |
+| AM | the brief's AM (MKT is left blank: the Project Brief has no MKT column since Oct 2026; fill it in the [row editor](#the-row-editor)) |
 | Amount (VAT-Ex.) (PHP) | Contract Value × **57** if USD, then **÷ 1.12** for 12% VAT, to the centavo |
 | VAT% | chosen in the sheet: **12%** (default for PHP) or **0%** (default for USD). The sheet quotes any VAT sentence from the brief's remarks. |
 | Project Description | Remarks |
@@ -226,7 +226,7 @@ Managers'). A brief shows on the **ANDON** tab while its code isn't in ANDON.
 | ------------ | ----- |
 | Project, Project Code | the brief's Project Name and canonical code |
 | AM | the brief's AM (ANDON holds one) |
-| MKT (PITCH) | the brief's MKT |
+| MKT (PITCH) | left blank (the Project Brief has no MKT column any more) |
 | PM (LEAD) | who you pick in the sheet (blank by default; frequent ANDON PMs first) |
 | TRIBE | picked in the sheet (blank by default; it can't be worked out from the brief) |
 | Business Unit, Tools | the brief's, when ANDON has a matching option |
@@ -270,9 +270,9 @@ All rules are in [`js/config.js`](js/config.js) and [`js/sync.js`](js/sync.js).
 
 The **Audit** tab checks every Universe and ANDON row against its Project Brief
 (matched by project code; the newest brief that wasn't rejected or withdrawn) and
-lists each row that has **blank cells the brief can fill**: AM, MKT, the amount,
+lists each row that has **blank cells the brief can fill**: AM, the amount,
 Project Description, start and end dates, RFP Received Date and Year for the
-Universe; the typed ANDON columns (AM, MKT (PITCH), Business Unit, Tools, Event
+Universe; the typed ANDON columns (AM, Business Unit, Tools, Event
 Start / End…) for ANDON. It also lists signed projects with no signed CE on file
 (see below).
 
@@ -311,8 +311,27 @@ creates it).
   cell someone filled meanwhile is left alone, then everything written is read back.
 - Never audited: what a person decides (Client, BD, Other Links, Status, Mancom
   Phase, VAT% on its own, PM (LEAD), TRIBE) and what Lark computes (lookups, formulas).
-- **Hide** removes a card **on this device only** (nothing is written to Lark).
-  It comes back if another cell of that row goes blank.
+- **Hide ▾** (on Universe cards) opens a menu:
+  - **Mark as {tag}**, one per custom tag (*No Revenue*, *Hidden*…, see
+    [Settings](#settings)). It writes the tag into the Universe row's **Tags** column
+    (plain text, tags separated by commas), so it's shared: the
+    card leaves **everyone's** Audit list and shows in that tag's group at the
+    **bottom of the list** (folded; click to open). The tag is added to whatever the
+    cell says in Lark at that moment, so other tags in it stay. It's instant, with
+    **Undo**; if Lark refuses, the card moves back and the message says why.
+  - **Hide on this device**: as before, nothing is written to Lark, and the card
+    comes back if another cell of that row goes blank.
+
+  A card in a tag group has **Unmark** (takes that tag off; the card is back in the
+  list) and **Fill**. Only tags in the custom tag list count: other words in the Tags
+  column are left alone and don't hide anything. If the Universe has no **Tags**
+  column, the menu says so (`npm run setup -- --apply --optional` adds it).
+
+  **ANDON cards keep the plain Hide** (on this device only): ANDON belongs to Project
+  Management and has no Tags column, so custom tags are off there and Polaris doesn't
+  look for one. The column name and the tables that use tags are `tags.field` and
+  `tags.tables` in [`js/config.js`](js/config.js); add `"andon"` there if ANDON ever
+  gets a Tags column.
 
 ---
 
@@ -415,6 +434,7 @@ The gear in the top bar. It works logged out too.
 | **Appearance** | Light, Dark or System. |
 | **Connections** | **Connection service**: Awake (with its version once it reports one), Waking up, Out of date or Unreachable, with **Wake up** / **Try again**. **Lark tables**: connected, with the row count, or the column problems found. One row per table, each with **Open in Lark**. |
 | **Advanced** (only on a page opened from this computer) | Another connection service address, saved in this browser. Only an `https://` address, or an `http://` one on this computer. A `?lark=<address>` link does the same for one tab, and `?reset` clears it. While any override is active the top bar shows a red **Overridden** badge (hover it to see what). |
+| **Custom tags** | The tags offered under **Hide ▾** on audit cards, with how many rows each marks. **Add tag** adds one; **×** removes one (after a confirmation): its rows come back into the Audit list, and their Tags cells aren't changed, so adding it again groups them again. A tag can't contain a comma or semicolon. The list lives in the **Variables** table in Lark (`TABLES.variables`): one row per tag, with `custom_tag` in the **Variable** column and the tag in **Value** (the names are `tags` in `js/config.js`; if the table names its columns differently, Polaris finds the one with `custom_tag` in it). If the table can't be read, only the custom tags are off. |
 | **This browser** | **Clear local data** forgets the audit cards you hid, the tables' sort order and folded groups, and unsent drafts. Your login and theme stay. **Undo** in the message puts them back. |
 
 What Polaris keeps in this browser (every key starts with `polaris.`, all values are JSON):
@@ -688,6 +708,9 @@ the live tables.
 | *"…" changed since the list was loaded.* | Someone updated that Collections row meanwhile. Nothing was written; the list refreshed, so check the card again. The same message appears for invoice details: the cells you changed were changed in Lark first. |
 | *A won project needs Sign Date and Month.* (Fill) | Type the missing one(s) in; the Fill stays off until both have a value. |
 | *Nothing was written. Status changed in Lark since the row was opened.* (queue, a row edit) | Someone changed the same cell meanwhile. **Edit** opens the row fresh from Lark with your changes; check it and push again (or **Remove**). |
+| No *Mark as …* under Hide, only *Why no “Mark as …”?* | The Universe has no **Tags** column (or your login can only read). Click it to see which; add the column (a plain text column named `Tags`) and press **Refresh**. |
+| An ANDON audit card has a plain **Hide**, no menu | That's on purpose: custom tags are Universe-only (`tags.tables` in `js/config.js`). |
+| *Polaris couldn't find the custom tags in the Variables table.* (Settings) | The Variables table needs a column with `custom_tag` in it and a value column (ideally named **Variable** and **Value**). |
 | *Add the file for Signed CE (PDF)…* (Fill) | Use **Add the signed CE** to pick the PDF, or untick **Signed CE (PDF)** to fill the card's other blanks without it. |
 | *"…" is over 10 MB* (Fill) | Compress the PDF (or split it into parts and add each one), then add it again. |
 | *Someone had already filled …, so those were left as they were.* (after Fill) | The audit only fills blank cells; those weren't blank any more. |

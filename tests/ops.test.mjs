@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { RULES } from "../js/config.js";
-import { saveInvoiceDetails, fillGaps, createRecord, AlreadyDone, columnsToRead, schemaSpec, saveEdit, EditConflict } from "../js/ops.js";
+import { saveInvoiceDetails, fillGaps, createRecord, AlreadyDone, columnsToRead, schemaSpec, saveEdit, EditConflict, setTag, loadEverything } from "../js/ops.js";
 import { collectionRow } from "../js/sync.js";
 import { LarkError, isUncertain } from "../js/errors.js";
 
@@ -188,4 +188,47 @@ test("columnsToRead: a destination table also reads its lookups and formulas; so
   assert.equal(columnsToRead("andon", [f("Project", 1)], RULES), undefined);
   const wide = [...universe, ...Array.from({ length: 40 }, (_, i) => f(`Formula ${i}`, 20))];
   assert.equal(columnsToRead("universe", wide, RULES), undefined);
+});
+
+test("tags: marking merges into what the Tags cell says in Lark now, and writes nothing if it's there", async () => {
+  const row = universeRow({ "Tags": seg("Client A") });
+  const lark = fakeLark([row]);
+  const res = await setTag(lark.call, T.universe, "recU1", "Tags", "No Revenue", true);
+  assert.deepEqual(lark.writes().map(w => w.body.records[0].fields), [{ "Tags": "Client A, No Revenue" }]);
+  assert.deepEqual(res.mismatches, []);
+  // someone added another tag meanwhile: it stays when ours comes off
+  row.fields["Tags"] = seg("Client A, No Revenue, Urgent");
+  await setTag(lark.call, T.universe, "recU1", "Tags", "No Revenue", false);
+  assert.equal(row.fields["Tags"], "Client A, Urgent");
+  // already off: nothing written
+  const again = await setTag(lark.call, T.universe, "recU1", "Tags", "No Revenue", false);
+  assert.equal(again.unchanged, true);
+  assert.equal(lark.writes().length, 2);
+});
+
+test("an unreadable Variables table doesn't stop the page; only the custom tags are off", async () => {
+  const tables = { universe: { app: "A", table: "tblUni" }, variables: { app: "A", table: "tblVar" } };
+  const call = async (method, url) => {
+    if (/tblVar/.test(url)) throw Object.assign(new Error("no permission"), { status: 403 });
+    if (/\/fields/.test(url)) return { code: 0, data: { items: [], has_more: false } };
+    return { code: 0, data: { items: [{ record_id: "r1", fields: {} }], has_more: false } };
+  };
+  const res = await loadEverything(call, tables, RULES);
+  assert.equal(res.data.universe.length, 1);
+  assert.ok(!("variables" in res.data));
+  assert.match(res.tableProblems.variables[0], /Variables: couldn't be read/);
+  // a dead login still ends it
+  const dead = async () => { throw Object.assign(new Error("dead"), { deadToken: true }); };
+  await assert.rejects(loadEverything(dead, { variables: tables.variables }, RULES), /dead/);
+});
+
+test("tags: only the tables in RULES.tags.tables use a Tags column (ANDON doesn't have one)", () => {
+  const spec = schemaSpec(RULES), field = RULES.tags.field;
+  assert.deepEqual(RULES.tags.tables, ["universe"]);
+  assert.equal(spec.universe.optional[field], 1);
+  assert.ok(spec.universe.read.includes(field) && spec.universe.neededBy["tag:universe"]);
+  assert.ok(!(spec.andon.optional || {})[field] && !(spec.andon.neededBy || {})["tag:andon"]);   // no column check, no problem reported
+  // switched on for ANDON, it would be checked the same way
+  const both = schemaSpec({ ...RULES, tags: { ...RULES.tags, tables: ["universe", "andon"] } });
+  assert.equal(both.andon.optional[field], 1);
 });
