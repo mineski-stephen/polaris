@@ -13,6 +13,8 @@ import {
   needsSignedCe, auditFilesMissing, isBlank,
   matchesQuery, andonView, canEditField, editChanges, editWrite, editCheck, editKey, writeValueOf,
   tagsOf, tagsWith, tagsWithout, variableColumns, customTagsFrom, customTagOf, tagGroups,
+  isLostProject, requiredMessage, sourceView, statusChange,
+  filterIndex, cardFacets, passesFilters, filterChoices, NONE, closestMatches,
 } from "../js/sync.js";
 import { writableOnly } from "../js/ops.js";
 
@@ -1004,4 +1006,137 @@ test("tags: a marked row leaves the audit list for its tag's group", () => {
   assert.deepEqual(tagGroups(res.tagged, ["Hidden", "Gone", "No Revenue"]).map(g => [g.tag, g.cards.length]), [["Hidden", 1], ["No Revenue", 1]]);
   // no custom tags (or no Tags column): everything stays in the list
   assert.equal(auditCards("universe", rows, [], RULES, { fields: cols, tags: [], tagField: "Tags" }).cards.length, 3);
+});
+
+/* ---------- the audit: lost, stalled and archived projects ---------- */
+
+test("audit: a lost, stalled or archived project must have Loss Month and Reason for Loss", () => {
+  const cols = ["Project Code", "Project", "Status", "Mancom Phase", "Sign Date", "Month", "Loss Month", "Reason for Loss"]
+    .map(field_name => ({ field_name, type: 1 }));
+  const rows = [
+    rec("l1", { "Project Code": seg("2026TEG-P0950"), "Project": seg("Lost pitch"), "Status": "Lost" }),
+    rec("l2", { "Project Code": seg("2026TEG-P0951"), "Project": seg("Stalled"), "Status": "Stalled", "Loss Month": "March" }),
+    rec("l3", { "Project Code": seg("2026TEG-P0952"), "Project": seg("Archived, complete"), "Status": "Archived",
+                "Loss Month": "May", "Reason for Loss": seg("Budget cut") }),
+    // won by phase, but the Status says lost: the lost rule wins (no Sign Date asked)
+    rec("l4", { "Project Code": seg("2026TEG-P0953"), "Project": seg("Won then lost"), "Status": "Lost", "Mancom Phase": "7. Won" }),
+    rec("l5", { "Project Code": seg("2026TEG-P0954"), "Project": seg("Pitching"), "Status": "For Pitching" }),
+  ];
+  for (const s of ["Stalled", "Lost", "Archived"]) assert.ok(isLostProject({ "Status": s }, RULES), s);
+  assert.ok(!isLostProject({ "Status": "Fully Closed" }, RULES));
+  const { cards } = auditCards("universe", rows, [], RULES, { fields: cols });
+  const by = Object.fromEntries(cards.map(c => [c.rowId, c]));
+  assert.deepEqual(by.l1.required, ["Loss Month", "Reason for Loss"]);
+  assert.equal(by.l1.requiredRule, "lost");
+  assert.deepEqual(by.l2.required, ["Reason for Loss"]);            // only what's blank
+  assert.equal(by.l3, undefined);                                    // complete
+  assert.deepEqual(by.l4.required, ["Loss Month", "Reason for Loss"]);
+  assert.equal(by.l5, undefined);
+  // the Fill: refused while either is blank, with the right sentence
+  const half = auditPatch(by.l1, rows[0], { fields: by.l1.gaps, values: { "Loss Month": "June" } }, RULES);
+  assert.deepEqual(auditMissing(by.l1, half), ["Reason for Loss"]);
+  assert.equal(requiredMessage(by.l1, ["Reason for Loss"]), "A lost, stalled or archived project needs Reason for Loss.");
+  const full = auditPatch(by.l1, rows[0], { fields: [], values: { "Loss Month": "June", "Reason for Loss": " Client went with another agency " } }, RULES);
+  assert.deepEqual(full, { "Loss Month": "June", "Reason for Loss": "Client went with another agency" });   // can't be unticked
+  // a won project's sentence is unchanged; a Universe without the columns isn't asked
+  const won = auditCards("universe", [rec("w", { "Project Code": seg("2026TEG-P0955"), "Status": "Signed CE" })], [], RULES, { fields: cols }).cards[0];
+  assert.equal(requiredMessage(won, ["Month"]), "A won project needs Month.");
+  assert.equal(auditCards("universe", rows, [], RULES, { fields: cols.filter(c => !/Loss/.test(c.field_name)) }).cards.length, 0);
+});
+
+test("source tables: newest submitted first, every column searched, long tables capped", () => {
+  const rows = [
+    rec("p1", { "Request No.": url("202601010001"), "Project Code": seg("2026TEG-P0001"), "Project Name": seg("Old one"), "Status": "Approved", "Submitted at": 100 }),
+    rec("p2", { "Request No.": url("202602020002"), "Project Code": seg("2026TEG-P0002"), "Project Name": seg("New one"), "Status": "Under Review",
+                "Submitted at": 300, "Amount": 1120, "Amount-Currency": "PHP", "Initiator department": seg("Account Managers") }),
+    rec("p3", { "Request No.": url("202603030003"), "Project Name": seg("Undated") }),
+  ];
+  const v = sourceView(rows);
+  assert.deepEqual(v.rows.map(r => r.id), ["p2", "p1", "p3"]);
+  assert.deepEqual(sourceView(rows, { sort: "asc" }).rows.map(r => r.id), ["p1", "p2", "p3"]);
+  assert.equal(v.rows[0].requestNo, "202602020002");
+  assert.equal(v.rows[0].link, "https://applink.larksuite.com/x?instanceId=202602020002");
+  assert.deepEqual([v.rows[0].amount, v.rows[0].currency, v.rows[0].dept], [1120, "PHP", "Account Managers"]);
+  assert.deepEqual(sourceView(rows, { query: "account managers" }).rows.map(r => r.id), ["p2"]);   // a column the table doesn't show
+  const capped = sourceView(rows, { limit: 2 });
+  assert.deepEqual([capped.rows.length, capped.count], [2, 3]);
+});
+
+test("audit: a lost project's Status can be changed among Stalled, Lost and Archived", () => {
+  const cols = ["Project Code", "Project", "Status", "Loss Month", "Reason for Loss"].map(field_name => ({ field_name, type: 1 }));
+  const row = rec("s1", { "Project Code": seg("2026TEG-P0960"), "Project": seg("Marked lost"), "Status": "Lost" });
+  const [c] = auditCards("universe", [row], [], RULES, { fields: cols }).cards;
+  assert.equal(c.lost, true);
+  const values = { "Loss Month": "June", "Reason for Loss": "Paused by client" };
+  // picked Stalled: written with the Fill
+  assert.deepEqual(auditPatch(c, row, { fields: c.gaps, values, status: "Stalled" }, RULES),
+    { ...values, "Status": "Stalled" });
+  // the same one, or something outside the three: nothing changes
+  assert.equal(statusChange(c, { status: "Lost" }, RULES), null);
+  assert.equal(statusChange(c, { status: "Fully Closed" }, RULES), null);
+  assert.equal(statusChange(c, {}, RULES), null);
+  // a won project's card never changes Status
+  const won = auditCards("universe", [rec("w", { "Project Code": seg("2026TEG-P0961"), "Status": "Signed CE" })], [], RULES,
+    { fields: [...cols, { field_name: "Sign Date", type: 5 }, { field_name: "Month", type: 5 }] }).cards[0];
+  assert.equal(statusChange(won, { status: "Stalled" }, RULES), null);
+
+  // Status isn't a blank: written only if the row still says what the card showed
+  const patch = { "Reason for Loss": "Paused by client", "Status": "Stalled" };
+  assert.deepEqual(fillPlan(patch, { "Status": "Lost" }, { Status: "Lost" }), { written: patch, skipped: [] });
+  assert.deepEqual(fillPlan(patch, { "Status": "Archived" }, { Status: "Lost" }),      // someone changed it meanwhile
+    { written: { "Reason for Loss": "Paused by client" }, skipped: ["Status"] });
+  assert.deepEqual(fillPlan(patch, { "Status": "Stalled" }, { Status: "Lost" }),       // already what we want
+    { written: { "Reason for Loss": "Paused by client" }, skipped: [] });
+  assert.deepEqual(fillPlan({ "Status": "Stalled" }, { "Status": "Lost" }), { written: {}, skipped: ["Status"] });   // never without the guard
+});
+
+/* ---------- inbox filters ---------- */
+
+test("filters: a card takes its project's Client, Status, BD, AM and Tribe; a new brief its own BD and AM", () => {
+  const universe = [rec("u1", { "Project Code": seg("2026TEG-P0700"), "Client": seg("Acme"), "Status": "Signed CE",
+    "BD": [user("ou_b", "Bea Dee")], "AM": [user("ou_a", "Ana Em")] })];
+  const andon = [rec("a1", { "Project Code": seg("2026TEG-P0700"), "TRIBE": "Tribe A" }),
+                 rec("a2", { "Project Code": seg("2026TEG-P0701"), "TRIBE": "Tribe B" })];
+  const idx = filterIndex(universe, andon);
+  // a card for a project in the Universe (any kind: an invoice, a PAR, an audit card…)
+  const f1 = cardFacets({ kind: "invoice", code: "2026TEG-P0700" }, idx);
+  assert.deepEqual(f1, { client: ["Acme"], status: ["Signed CE"], bd: ["Bea Dee"], am: ["Ana Em"], tribe: ["Tribe A"], inUniverse: true });
+  // a brief not in the Universe yet: its own BD and AM, ANDON's tribe, no client or status
+  const brief = { kind: "brief", code: "2026TEG-P0701", record: rec("b", { "BD": [user("ou_x", "Xu")], "AM": [user("ou_y", "Yo")] }) };
+  const f2 = cardFacets(brief, idx);
+  assert.deepEqual(f2, { client: [], status: [], bd: ["Xu"], am: ["Yo"], tribe: ["Tribe B"], inUniverse: false });
+  // a Universe Tribe column (a lookup) wins over ANDON's
+  const withTribe = filterIndex([rec("u", { "Project Code": seg("2026TEG-P0700"), "Tribe": { type: 3, value: ["Tribe Z"] } })], andon);
+  assert.deepEqual(cardFacets({ kind: "par", code: "2026TEG-P0700" }, withTribe).tribe, ["Tribe Z"]);
+
+  // passing: any (null), a value (any case), or none
+  assert.ok(passesFilters(f1, { client: null, am: "ana em" }));
+  assert.ok(!passesFilters(f1, { client: "Other" }));
+  assert.ok(passesFilters(f2, { client: NONE, status: NONE }));
+  assert.ok(!passesFilters(f1, { status: NONE }));
+  assert.ok(passesFilters(f1, { client: "Acme", status: "Signed CE", bd: "Bea Dee", am: "Ana Em", tribe: "Tribe A" }));   // all together
+});
+
+test("filters: each list offers what the cards have, counted as the other filters leave them", () => {
+  const card = (client, status, am) => ({ facets: { client: client ? [client] : [], status: status ? [status] : [], bd: [], am, tribe: [] } });
+  const cards = [card("Acme", "Lost", ["Ana"]), card("Acme", "Signed CE", ["Ana", "Bo"]), card("Zeta", "Signed CE", ["Bo"]), card("", "", [])];
+  assert.deepEqual(filterChoices(cards, "client", {}), { values: [{ value: "Acme", n: 2 }, { value: "Zeta", n: 1 }], none: 1 });
+  // the Status column's order first
+  assert.deepEqual(filterChoices(cards, "status", {}, ["Signed CE", "Lost"]).values.map(v => v.value), ["Signed CE", "Lost"]);
+  // with AM = Bo picked, the client counts only cover Bo's cards (and the AM list ignores its own pick)
+  assert.deepEqual(filterChoices(cards, "client", { am: "Bo" }).values, [{ value: "Acme", n: 1 }, { value: "Zeta", n: 1 }]);
+  assert.deepEqual(filterChoices(cards, "am", { am: "Bo" }).values, [{ value: "Ana", n: 2 }, { value: "Bo", n: 2 }]);
+});
+
+test("filters: the Client box offers the closest matches to what's typed", () => {
+  const v = (value, n) => ({ value, n });
+  const clients = [v("Kestrel Motors", 3), v("Acme Kestrel", 1), v("Lumen Bank", 5), v("Bluepeak Telecom", 2), v("Kes", 1), v("Orchid Cosmetics", 1)];
+  const names = (q, limit) => closestMatches(clients, q, limit).map(x => x.value);
+  assert.deepEqual(names("kes"), ["Kes", "Kestrel Motors", "Acme Kestrel"]);    // whole name, starts with, then a word starts with
+  assert.deepEqual(names("bank"), ["Lumen Bank"]);
+  assert.deepEqual(names("tele"), ["Bluepeak Telecom"]);
+  assert.deepEqual(names("lmnbk"), ["Lumen Bank"]);                             // letters in order
+  assert.deepEqual(names("zzz"), []);
+  assert.deepEqual(names("", 2), ["Lumen Bank", "Kestrel Motors"]);              // nothing typed: the most cards
+  assert.deepEqual(names(" KESTREL "), ["Kestrel Motors", "Acme Kestrel"]);    // any case, spaces trimmed
 });

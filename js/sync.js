@@ -170,6 +170,112 @@ export function indexUniverse(records, { ignoreField = "IGNORE" } = {}) {
   return { rows, byCode, byPar, parNos: new Set(byPar.keys()) };
 }
 
+/* ======================= inbox filters (Client, Status, BD, AM, Tribe) =======================
+   Every card is about a project; its filter values are the project's, found by its
+   code: Client, Status, BD and AM from its Universe row; Tribe from the Universe (a
+   Tribe lookup, if the table has one) or else ANDON's TRIBE. A project that isn't in
+   the Universe yet (a new brief) takes BD and AM from its brief. */
+export const FILTER_KEYS = ["client", "status", "bd", "am", "tribe"];
+
+/* The rows filter values come from, by project code. */
+export function filterIndex(universe, andon) {
+  const by = (records) => {
+    const m = new Map();
+    for (const r of records || []) {
+      const f = r.fields || {};
+      for (const c of new Set(allCodes(clean(f["Project Code"])))) if (!m.has(c)) m.set(c, f);
+    }
+    return m;
+  };
+  return { uni: by(universe), andon: by(andon) };
+}
+
+const tribeOf = (f) => {
+  if (!f) return "";
+  const k = Object.keys(f).find(n => /^tribe$/i.test(n.trim()));
+  return k ? clean(f[k]) : "";
+};
+
+/* A card's filter values: { client: [..], status: [..], bd: [..], am: [..], tribe: [..], inUniverse }.
+   Each a list (people can be several); an empty list means none. */
+export function cardFacets(card, idx) {
+  const code = normCode(card.code || "");
+  const u = code ? idx.uni.get(code) : null;
+  const a = code ? idx.andon.get(code) : null;
+  // The brief, for a project the Universe doesn't have yet.
+  const brief = card.kind === "brief" || card.kind === "andon" ? (card.record || {}).fields
+    : card.brief ? (card.brief.record || {}).fields : null;
+  const names = (v) => people(v).map(p => p.name);
+  const list = (s) => (s ? [s] : []);
+  const pick = (k) => { const fromU = u ? names(u[k]) : []; return fromU.length ? fromU : brief ? names(brief[k]) : []; };
+  return {
+    client: list(u ? clean(u["Client"]) : ""),
+    status: list(u ? clean(u["Status"]) : ""),
+    bd: pick("BD"),
+    am: pick("AM"),
+    tribe: list(tribeOf(u) || tribeOf(a)),
+    inUniverse: !!u,
+  };
+}
+
+/* Does a card pass the filters? `filters` = { key: value | NONE | null }: null (or
+   missing) is any; NONE (the empty string) means "has none"; a value must be one of
+   the card's (any case). */
+export const NONE = "";
+export function passesFilters(facets, filters) {
+  if (!facets) return true;
+  for (const k of FILTER_KEYS) {
+    const want = filters && filters[k];
+    if (want === null || want === undefined) continue;
+    const have = facets[k] || [];
+    if (want === NONE ? have.length : !have.some(v => v.toLowerCase() === want.toLowerCase())) return false;
+  }
+  return true;
+}
+
+/* The choices for one filter, from `cards` (as the other filters leave them): each
+   value with how many cards have it, plus how many have none. `order` puts values in
+   a given order first (the Status column's own); the rest go A-Z.
+   → { values: [{ value, n }], none } */
+export function filterChoices(cards, key, filters, order = []) {
+  const others = { ...(filters || {}), [key]: null };
+  const counts = new Map();
+  let none = 0;
+  for (const c of cards) {
+    if (!passesFilters(c.facets, others)) continue;
+    const vals = (c.facets && c.facets[key]) || [];
+    if (!vals.length) none++;
+    for (const v of new Set(vals)) counts.set(v, (counts.get(v) || 0) + 1);
+  }
+  const rank = (v) => { const i = order.indexOf(v); return i < 0 ? Infinity : i; };
+  const values = [...counts].map(([value, n]) => ({ value, n }))
+    .sort((a, b) => rank(a.value) - rank(b.value) || a.value.localeCompare(b.value));
+  return { values, none };
+}
+
+/* The closest matches to what's typed, for a type-to-pick filter (Client): `values`
+   = [{ value, n }]. Best first: the whole name, then names starting with it, then a
+   word starting with it, then containing it, then its letters in order ("kstrl" →
+   Kestrel Motors); ties go to the one with more cards, then A-Z. Nothing typed: the
+   ones with the most cards. At most `limit`. */
+export function closestMatches(values, query, limit = 8) {
+  const q = String(query || "").trim().toLowerCase();
+  const qq = q.replace(/\s+/g, "");
+  const inOrder = (s) => { let i = 0; for (const ch of s) if (ch === qq[i]) i++; return i === qq.length; };
+  const score = (v) => {
+    const s = v.toLowerCase();
+    if (!q) return 0;
+    if (s === q) return 0;
+    if (s.startsWith(q)) return 1;
+    if (s.split(/[\s\-/&.,()]+/).some(w => w.startsWith(q))) return 2;
+    if (s.includes(q)) return 3;
+    return inOrder(s.replace(/\s+/g, "")) ? 4 : Infinity;
+  };
+  return values.map(v => ({ ...v, score: score(v.value) })).filter(v => v.score < Infinity)
+    .sort((a, b) => a.score - b.score || b.n - a.n || a.value.localeCompare(b.value))
+    .slice(0, limit).map(({ score, ...v }) => v);
+}
+
 /* Collections, keyed by invoice request number and by project code. */
 export function indexCollections(records) {
   const rows = [], byIr = new Map(), byCode = new Map();
@@ -529,9 +635,32 @@ export function monthOf(signMs, def, rules) {
   return null;
 }
 
+/* A lost, stalled or archived Universe project (rules.auditLost, by Status): it must
+   have Loss Month and Reason for Loss. */
+export function isLostProject(fields, rules) {
+  const r = rules.auditLost;
+  if (!r) return false;
+  const status = clean(fields["Status"]);
+  return r.statuses.some(s => s.trim() === status);
+}
+
+/* The columns a Universe row must have filled by a person, given its status: the
+   lost rule (it wins: the Status says where the project is now), else the won rule.
+   { rule: "lost" | "won" | "", fields: [its required columns, all of them], who } */
+export function requiredRule(fields, rules) {
+  if (isLostProject(fields, rules)) return { rule: "lost", fields: rules.auditLost.fields, who: rules.auditLost.who };
+  if (isWonProject(fields, rules)) return { rule: "won", fields: rules.auditRequired.fields, who: rules.auditRequired.who || "A won project" };
+  return { rule: "", fields: [], who: "" };
+}
+
 /* The required columns a Fill would still leave blank: refused while any are. */
 export function auditMissing(card, patch) {
   return (card.required || []).filter(k => isBlank(patch[k]));
+}
+
+/* The sentence that refuses such a Fill: "A won project needs Sign Date and Month." */
+export function requiredMessage(card, missing) {
+  return `${card.requiredWho || "This project"} needs ${missing.join(" and ")}.`;
 }
 
 /* A Universe project that must have its signed CE on file (rules.auditFiles, by Status). */
@@ -628,8 +757,9 @@ export function auditCards(target, records, briefs, rules, { hide = new Set(), o
     const code = normCode(plain(f["Project Code"]));
     if (!code) continue;
     const has = fields ? new Set(fields.map(d => d.field_name)) : null;
-    const required = target === "universe" && isWonProject(f, rules)
-      ? rules.auditRequired.fields.filter(k => (!has || has.has(k)) && isBlank(f[k])) : [];
+    // Won: Sign Date and Month. Lost / stalled / archived: Loss Month and Reason for Loss.
+    const req = target === "universe" ? requiredRule(f, rules) : { rule: "", fields: [], who: "" };
+    const required = req.fields.filter(k => (!has || has.has(k)) && isBlank(f[k]));
     const af = rules.auditFiles;
     const files = target === "universe" && af && needsSignedCe(f, rules) && (!has || has.has(af.field)) && isBlank(f[af.field])
       ? [af.field] : [];
@@ -646,6 +776,9 @@ export function auditCards(target, records, briefs, rules, { hide = new Set(), o
       kind: "audit", target, id, rowId: row.record_id, code,
       name: clean(f["Project"]) || (brief && brief.name) || "", status: target === "universe" ? clean(f["Status"]) : "",
       submittedAt: brief ? brief.submittedAt : null, requestNo: brief ? brief.requestNo : "", brief, gaps, required, files,
+      requiredRule: required.length ? req.rule : "", requiredWho: required.length ? req.who : "",
+      // Stalled, Lost or Archived: the sheet offers to change which (statusChange).
+      lost: target === "universe" && isLostProject(f, rules),
       // The amount needs a VAT rate; the row has none, so the sheet asks for it.
       needsVat: !!brief && target === "universe" && gaps.includes("Amount (VAT-Ex.) (PHP)") && !clean(f["VAT%"]),
       notes: [], blocked: "",
@@ -705,20 +838,41 @@ export function auditPatch(card, row, choices, rules, { options, fields } = {}) 
     const v = choices.values && choices.values[k];
     if (!(k in out) && !isBlank(v)) out[k] = typeof v === "string" ? v.trim() : v;
   }
+  // A lost, stalled or archived project marked with the wrong one of those: the sheet's
+  // Status picks another of them (choices.status), written with the Fill.
+  const st = statusChange(card, choices, rules);
+  if (st) out["Status"] = st;
   return out;
+}
+
+/* The Status a lost-project card's sheet changes to, or null: only to another of
+   rules.auditLost.statuses (Stalled ↔ Lost ↔ Archived), never to the same one. */
+export function statusChange(card, choices, rules) {
+  const s = choices && choices.status;
+  if (!card.lost || !s || s === card.status || !rules.auditLost || !rules.auditLost.statuses.includes(s)) return null;
+  return s;
 }
 
 /* Which cells of an audit patch may still be written, given the row as Lark has it
    now (`nowFields`): only cells that are still blank. VAT% is derived: it goes out
    together with the amount, only if it's still blank, and if someone set a different
    VAT% meanwhile the amount (worked out with the chosen one) is held back too.
+   `overwrite` = cells the patch may change even though they have a value ({Status:
+   what the card showed}): written only if the row still says that; if Lark already
+   has the new value, nothing to do; anything else means someone changed it: skipped.
    Returns {written, skipped}: what to write, and the columns someone filled meanwhile. */
-export function fillPlan(patch, nowFields) {
+export function fillPlan(patch, nowFields, overwrite = {}) {
   const now = nowFields || {};
   const AMOUNT = "Amount (VAT-Ex.) (PHP)";
   const written = {}, skipped = [];
   for (const [k, v] of Object.entries(patch)) {
     if (k === "VAT%") continue;
+    if (k in overwrite) {
+      const there = clean(now[k]);
+      if (there === clean(v)) continue;                       // already so
+      if (there === clean(overwrite[k])) written[k] = v; else skipped.push(k);
+      continue;
+    }
     if (isBlank(now[k])) written[k] = v; else skipped.push(k);
   }
   if ("VAT%" in patch) {
@@ -795,6 +949,40 @@ export function universeView(records, { year = "all", hidden = [], statusOrder =
   const shown = groups.reduce((n, g) => n + g.rows.length, 0);
   return { groups, years, hiddenCounts, count: shown,
            amount: round2(groups.reduce((s, g) => s + g.amount, 0)) };
+}
+
+/* ======================= the source tables' view ======================= */
+/* Project Brief, Project Approval and Invoice Request (filled by Lark Approval), as
+   a table beside the list: every row, newest submitted first. */
+
+/* One approval record as a table row (each table has some of these columns). */
+export function sourceRow(r) {
+  const f = r.fields || {};
+  const value = num(f["Contract Value"]) ?? num(f["Amount"]);
+  return {
+    id: r.record_id,
+    requestNo: requestNo(f["Request No."]),
+    link: (f["Request No."] && f["Request No."].link) || "",
+    code: clean(f["Project Code"]),
+    name: clean(f["Project Name"]),
+    status: clean(f["Status"]),
+    dept: clean(f["Initiator department"]),
+    am: people(f["AM"]),
+    amount: value,
+    currency: clean(f["Contract Value-Currency"]) || clean(f["Amount-Currency"]),
+    submittedAt: num(f["Submitted at"]),
+  };
+}
+
+/* The rows, newest submitted first (`sort` "asc" flips it; no date last). `query`
+   searches every column read (see matchesQuery). Only the first `limit` rows are
+   returned (a long table stays quick to draw); `count` is how many matched. */
+export function sourceView(records, { sort = "desc", query = "", limit = Infinity } = {}) {
+  const dir = sort === "asc" ? 1 : -1;
+  const rows = (records || []).filter(r => matchesQuery(r.fields, query)).map(sourceRow)
+    .sort((a, b) => (a.submittedAt === null) - (b.submittedAt === null) || dir * ((a.submittedAt || 0) - (b.submittedAt || 0))
+                    || b.requestNo.localeCompare(a.requestNo));
+  return { rows: rows.slice(0, limit), count: rows.length };
 }
 
 /* ======================= the ANDON view ======================= */

@@ -7,7 +7,7 @@ import { TABLE_TITLES, pushBrief, pushPar, pushCollections, pushAndon, setIgnore
 import {
   universeFromBrief, collectionsChange, stepStatus, parAfterAdding, defaultVat, vatMentions,
   people, andonFromBrief, auditPatch, auditMissing, auditFilesMissing, monthOf, clean, editChanges, editWrite,
-  tagsWith, tagsWithout,
+  tagsWith, tagsWithout, requiredMessage, FILTER_KEYS, NONE, passesFilters, filterChoices, closestMatches,
 } from "./sync.js";
 import { uploadSizeProblem } from "./errors.js";
 import { $, h, ic, toast, fmt, flash, copyable, store, collapse, busy, radioKeys, openMenu } from "./ui.js";
@@ -39,6 +39,7 @@ export function createInbox(ctx) {
 
   search.addEventListener("input", () => { S.query[S.tab] = search.value; renderCards(); });
   $("#refreshBtn").addEventListener("click", () => ctx.loadData({ quiet: true }));
+  $("#filterBtn").addEventListener("click", () => { S.filtersOpen = !S.filtersOpen; renderFilters(); });
 
   /* ======================= list ======================= */
   function render() {
@@ -50,7 +51,111 @@ export function createInbox(ctx) {
       : S.loadedAt ? [`Updated ${fmt.time(S.loadedAt)}`] : []));
     renderMessage();
     renderLoader();
+    renderFilters();
     renderCards();
+  }
+
+  /* ======================= filters: Client, Status, BD, AM, Tribe =======================
+     The same filters apply on every tab (and to the tab counts) until the page
+     reloads. Each list offers the values the open tab's cards have, with how many
+     (as the other filters leave them), plus "none". Picked ones show as chips under
+     the search, with × each and Clear. */
+  const FILTER_LABEL = { client: "Client", status: "Status", bd: "BD", am: "AM", tribe: "Tribe" };
+  const FILTER_NONE = { client: "No client", status: "No status (not in the Universe)", bd: "No BD", am: "No AM", tribe: "No tribe" };
+  const NONE_OPT = "\u0000none";   // the select's value for "has none"
+  const filterSelects = {};
+  const activeFilters = () => FILTER_KEYS.filter(k => S.filters[k] !== null && S.filters[k] !== undefined);
+  function setFilter(k, v) {
+    S.filters[k] = v;
+    ctx.render();   // the cards, the chips and every tab's count
+  }
+  function renderFilters() {
+    const panel = $("#inboxFilters"), chips = $("#filterChips"), btn = $("#filterBtn");
+    const on = activeFilters();
+    $("#filterCount").textContent = on.length ? String(on.length) : "";
+    btn.classList.toggle("is-on", on.length > 0);
+    btn.setAttribute("aria-expanded", String(S.filtersOpen));
+    btn.setAttribute("aria-label", `Filters${on.length ? ` (${on.length} on)` : ""}`);
+    panel.hidden = !S.filtersOpen || !S.lists;
+    if (!panel.hidden) {
+      if (!panel.children.length) {   // built once, so an open list isn't swept away by a re-render
+        panel.append(...FILTER_KEYS.map(k => {
+          if (k === "client") return clientFilter();   // too many clients for a list: type and pick
+          const sel = h("select", { id: `filter-${k}` });
+          sel.addEventListener("change", () => setFilter(k, sel.value === "" ? null : sel.value === NONE_OPT ? NONE : sel.value));
+          filterSelects[k] = sel;
+          return h("div", { class: "filter" }, h("label", { class: "field-label", for: sel.id }, FILTER_LABEL[k]), h("label", { class: "select" }, sel));
+        }));
+      }
+      const cards = (S.lists[S.tab].cards || []).concat((S.lists[S.tab].tagged || []).flatMap(g => g.cards)).filter(c => !ctx.queue.hides(c));
+      for (const k of FILTER_KEYS) {
+        const sel = filterSelects[k], want = S.filters[k];
+        const { values, none } = filterChoices(cards, k, S.filters, k === "status" ? S.statusOrder || [] : []);
+        if (k === "client") { client.choices = { values, none }; client.sync(); continue; }
+        // the picked value stays listed even if this tab has none of it
+        if (want && want !== NONE && !values.some(v => v.value.toLowerCase() === want.toLowerCase())) values.unshift({ value: want, n: 0 });
+        const opts = [["", "Any"], ...values.map(v => [v.value, `${v.value} (${v.n})`]), ...(none || want === NONE ? [[NONE_OPT, `${FILTER_NONE[k]} (${none})`]] : [])];
+        const sig = JSON.stringify(opts);
+        if (sel.dataset.sig !== sig) {
+          sel.replaceChildren(...opts.map(([v, text]) => h("option", { value: v }, text)));
+          sel.dataset.sig = sig;
+        }
+        sel.value = want === null || want === undefined ? "" : want === NONE ? NONE_OPT : (values.find(v => v.value.toLowerCase() === want.toLowerCase()) || { value: want }).value;
+      }
+    }
+    chips.hidden = !on.length;
+    chips.replaceChildren(...on.map(k => h("span", { class: "chip" }, `${FILTER_LABEL[k]}: ${S.filters[k] === NONE ? FILTER_NONE[k] : S.filters[k]}`,
+      h("button", { type: "button", "aria-label": `Clear the ${FILTER_LABEL[k]} filter`, onclick: () => setFilter(k, null) }, ic("x")))),
+      ...(on.length > 1 ? [h("button", { type: "button", class: "linkish", onclick: () => { FILTER_KEYS.forEach(k => { S.filters[k] = null; }); ctx.render(); } }, "Clear all")] : []));
+  }
+
+  /* The Client filter: type part of a name (or its letters in order) and the closest
+     matches show, each with its card count; click one, or arrow to it and Enter.
+     Enter with nothing highlighted takes the best match. Clearing the box and
+     leaving it is "Any"; leaving it half-typed puts back what was picked. */
+  const client = { choices: { values: [], none: 0 }, sync: () => {} };
+  function clientFilter() {
+    const input = h("input", { type: "text", id: "filter-client", autocomplete: "off", spellcheck: "false", placeholder: "Any: type a client",
+                               role: "combobox", "aria-autocomplete": "list", "aria-expanded": "false", "aria-controls": "filter-client-list" });
+    const list = h("ul", { class: "suggest", id: "filter-client-list", role: "listbox", hidden: true });
+    let items = [], active = -1;
+    const shown = () => { const w = S.filters.client; return w === null || w === undefined ? "" : w === NONE ? FILTER_NONE.client : w; };
+    const close = () => { list.hidden = true; input.setAttribute("aria-expanded", "false"); active = -1; };
+    const pick = (v) => { close(); input.value = v === NONE ? FILTER_NONE.client : v; setFilter("client", v); };
+    const show = () => {
+      const q = input.value === shown() ? "" : input.value;   // focused on the picked one: show everything
+      const { values, none } = client.choices;
+      items = closestMatches(values, q).map(v => [v.value, v.n]);
+      // "No client" when it's what's being typed (or nothing is), and some cards have none
+      if (none && (!q.trim() || FILTER_NONE.client.toLowerCase().startsWith(q.trim().toLowerCase()))) items.push([NONE, none]);
+      active = -1;
+      list.replaceChildren(...items.map(([v, n]) => h("li", { role: "option", "aria-selected": "false",
+        onmousedown: (e) => { e.preventDefault(); pick(v); } }, v === NONE ? h("em", null, FILTER_NONE.client) : v, h("small", null, String(n)))),
+        ...(!items.length ? [h("li", { class: "suggest-head", role: "presentation" }, q.trim() ? "No client by that name in this tab" : "No clients in this tab")] : []));
+      list.hidden = false;
+      input.setAttribute("aria-expanded", "true");
+    };
+    input.addEventListener("focus", () => { input.select(); show(); });
+    input.addEventListener("input", show);
+    input.addEventListener("blur", () => {
+      close();
+      if (!input.value.trim() && S.filters.client !== null) setFilter("client", null);   // cleared: any client
+      else input.value = shown();                                                        // half-typed: back to what's picked
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && active < 0) {   // nothing highlighted: the best match (or "Any" if the box is empty)
+        e.preventDefault();
+        if (!input.value.trim()) { close(); setFilter("client", null); return; }
+        if (items.length) pick(items[0][0]);
+        return;
+      }
+      keyNav(e, list, () => items.length, (i) => { active = i; return active; }, () => active,
+        () => { if (active >= 0) pick(items[active][0]); }, close);
+    });
+    // After a re-render: the box shows what's picked (unless someone's typing in it).
+    client.sync = () => { if (document.activeElement !== input) input.value = shown(); else if (!list.hidden) show(); };
+    return h("div", { class: "filter filter-client" }, h("label", { class: "field-label", for: input.id }, FILTER_LABEL.client),
+      h("div", { class: "picker" }, input, list));
   }
 
   function renderMessage() {
@@ -106,7 +211,8 @@ export function createInbox(ctx) {
     if (!S.lists) { box.replaceChildren(); empty.hidden = true; hiddenNote.textContent = ""; return; }
     const list = S.lists[S.tab];
     const q = S.query[S.tab] || "";
-    const cards = list.cards.filter(c => !ctx.queue.hides(c) && matches(c, q));   // queued ones have left
+    const found = list.cards.filter(c => !ctx.queue.hides(c) && matches(c, q));   // queued ones have left
+    const cards = found.filter(c => passesFilters(c.facets, S.filters));
     // Re-rendering mustn't lose the keyboard's place (the queue re-renders as pushes land).
     const had = document.activeElement && document.activeElement.closest && document.activeElement.closest("#cards .item");
     const hadBtn = had ? [...had.querySelectorAll("button")].indexOf(document.activeElement) : -1;
@@ -117,13 +223,14 @@ export function createInbox(ctx) {
       if (btn) btn.focus({ preventScroll: true });
     }
     empty.hidden = cards.length > 0;
-    empty.textContent = q ? `No ${NOUN[S.tab]} match "${q.trim()}".`
+    empty.textContent = found.length && !cards.length ? `No ${NOUN[S.tab]} match the filters.`
+      : q ? `No ${NOUN[S.tab]} match "${q.trim()}".`
       : { brief: "Every brief is in the Universe. Nice work!",
           par: "Every PAR is in the Universe. Nice work!",
           invoice: "Collections is up to date. Nice work!",
           andon: "Every brief is in ANDON. Nice work!",
           audit: "Nothing in the Universe or ANDON has blanks to fill. Nice work!" }[S.tab];
-    hiddenNote.textContent = hiddenSummary(list.hidden);
+    hiddenNote.textContent = hiddenSummary({ ...list.hidden, filtered: found.length - cards.length });
     renderTagGroups(list, q);
     S.entering.clear();
     if (S.flashCard) {
@@ -139,6 +246,7 @@ export function createInbox(ctx) {
       ignored: "ignored", void: "rejected, recalled or cancelled",
       otherDept: "from other departments", noProject: "for projects not in the Universe",
       closed: "for closed or lost projects", hiddenHere: "hidden on this device",
+      filtered: "filtered out",
     };
     const parts = Object.keys(label).filter(k => hd[k] > 0).map(k => `${hd[k].toLocaleString()} ${label[k]}`);
     return parts.length ? `Not shown: ${parts.join(" · ")}.` : "";
@@ -373,7 +481,7 @@ export function createInbox(ctx) {
   const tagOpen = new Set();
   function renderTagGroups(list, q) {
     const box = $("#tagGroups");
-    const groups = S.tab === "audit" && list.tagged ? list.tagged.map(g => ({ ...g, cards: g.cards.filter(c => !ctx.queue.hides(c) && matches(c, q)) }))
+    const groups = S.tab === "audit" && list.tagged ? list.tagged.map(g => ({ ...g, cards: g.cards.filter(c => !ctx.queue.hides(c) && matches(c, q) && passesFilters(c.facets, S.filters)) }))
       .filter(g => g.cards.length) : [];
     box.hidden = !groups.length;
     box.replaceChildren(...groups.map(g => {
@@ -474,7 +582,7 @@ export function createInbox(ctx) {
       const tooBig = uploading ? ch.files.map(f => uploadSizeProblem(f, LARK.maxUploadMb)).filter(Boolean) : [];
       sheet.blocked = bad.length ? `Check ${bad.join(", ")}: ${bad.length === 1 ? "it isn't" : "they aren't"} valid yet.`
         : tooBig.length ? tooBig[0]
-        : missing.length ? `A won project needs ${missing.join(" and ")}.`
+        : missing.length ? requiredMessage(c, missing)
         : noFile.length ? `Add the file for ${noFile.join(", ")}${c.gaps.length > 1 ? ", or untick it to fill the rest" : ""}.`
         : n ? "" : "Tick at least one field to fill.";
       go.disabled = sheet.busy || !!sheet.blocked;
@@ -482,9 +590,13 @@ export function createInbox(ctx) {
       if (!sheet.busy) {
         go.querySelector(".label").textContent = !n ? "Fill"
           : uploading && n === 1 ? `Upload ${files} file${files === 1 ? "" : "s"}`
+          : "Status" in patch && n === 1 ? "Change Status"
           : `Fill ${n} field${n === 1 ? "" : "s"}`;
       }
-      blockNote.hidden = !sheet.blocked || (!n && !missing.length && !noFile.length);
+      // A required field still blank (Sign Date and Month, Loss Month and Reason for
+      // Loss) just keeps Fill off: they're always ticked, so nobody needs the rule spelled out.
+      const onlyRequired = !bad.length && !tooBig.length && missing.length > 0;
+      blockNote.hidden = !sheet.blocked || onlyRequired || (!n && !noFile.length);
       blockNote.textContent = sheet.blocked;
       vatBox.hidden = !(c.needsVat && ch.fields.includes(AMOUNT));
       paintDoc();
@@ -615,7 +727,21 @@ export function createInbox(ctx) {
       radioKeys(seg);
       vatBox.replaceChildren(h("span", { class: "field-label" }, "VAT"), seg);
     }
-    put(body, h("div", { class: "gaps" }, rows), vatBox, blockNote);
+    // A lost, stalled or archived project: its Status can be put right here, among those
+    // three (people sometimes pick Lost for one that's only stalled or archived).
+    let statusBox = null;
+    if (c.lost) {
+      const have = selects.Status || [];
+      const choices = RULES.auditLost.statuses.filter(s => s === c.status || !have.length || have.includes(s));
+      const sel = h("select", { id: "auditStatus" }, choices.map(s => h("option", { value: s }, s)));
+      sel.value = ch.status || c.status;
+      sel.addEventListener("change", () => { ch.status = sel.value; refresh(); });
+      statusBox = h("div", { class: "field" },
+        h("label", { class: "field-label", for: "auditStatus" }, "Status"),
+        h("label", { class: "select" }, sel),
+        h("p", { class: "set-sub" }, `Change it if it was marked ${c.status} by mistake.`));
+    }
+    put(body, statusBox, h("div", { class: "gaps" }, rows), vatBox, blockNote);
     refresh();
   }
 
@@ -1025,8 +1151,11 @@ export function createInbox(ctx) {
       const fields = auditPatch(c, auditRow(c), ch, RULES, auditOpts(c));
       // The signed CE shows by file name (the write itself uses the uploaded tokens).
       for (const k of c.files || []) if (k in fields) fields[k] = (ch.files || []).map(f => ({ name: f.name }));
-      const n = Object.keys(fields).length;
-      return { ...base, verb: `Fill ${n} blank${n === 1 ? "" : "s"} in ${AUDIT_WHERE[c.target]}`, table: c.target, rowId: c.rowId, fields };
+      // (a lost project's Status change is said apart from the blanks)
+      const n = Object.keys(fields).length - ("Status" in fields ? 1 : 0);
+      const verb = [n ? `Fill ${n} blank${n === 1 ? "" : "s"}` : "", "Status" in fields ? `${n ? "set" : "Set"} Status to ${fields["Status"]}` : ""]
+        .filter(Boolean).join(" and ");
+      return { ...base, verb: `${verb} in ${AUDIT_WHERE[c.target]}`, table: c.target, rowId: c.rowId, fields };
     }
     const change = collectionsChange(c, ch, ctx.collectionOptions(), RULES);
     const fields = { ...change.fields };
@@ -1070,7 +1199,7 @@ export function createInbox(ctx) {
       payload = auditPatch(c, auditRow(c), ch, RULES, auditOpts(c));
       const missing = auditMissing(c, payload);
       if (missing.length) {   // refused here too, not only in the sheet
-        throw Object.assign(new Error("required"), { userMessage: `A won project needs ${missing.join(" and ")}.` });
+        throw Object.assign(new Error("required"), { userMessage: requiredMessage(c, missing) });
       }
       const noFile = auditFilesMissing(c, ch);
       if (noFile.length) throw Object.assign(new Error("no file"), { userMessage: `Add the file for ${noFile.join(", ")}.` });
@@ -1084,7 +1213,8 @@ export function createInbox(ctx) {
       if (Object.values(payload).some(v => Array.isArray(v) && v.some(x => x && x.name && !x.file_token))) {
         throw Object.assign(new Error("not uploaded"), { userMessage: "A file didn't upload. Try again." });
       }
-      res = await fillGaps(ctx.call, ctx.tables[c.target], c.rowId, payload);
+      // A changed Status isn't a blank: it's written only if the row still says what the card showed.
+      res = await fillGaps(ctx.call, ctx.tables[c.target], c.rowId, payload, "Status" in payload ? { Status: c.status } : {});
     } else {
       const change = collectionsChange(c, { ...ch, invalid: job.invalid }, ctx.collectionOptions(), RULES);
       if (c.step === "approved") Object.assign(change.fields, await invoiceDetails(ch, onStatus));

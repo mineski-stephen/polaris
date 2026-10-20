@@ -59,8 +59,10 @@ export function schemaSpec(rules) {
              "MKT", "VAT%", "Project Description", "Project Start", "Project End",
              // …and the rest a push writes, so the push sheet can show the whole row
              "Mancom Phase", "Other Links",
-             // …and what a won project must have (the audit asks for these)
-             ...rules.auditRequired.fields, rules.auditFiles.field,
+             // …and what the team notes on a project, shown in the push sheet's row (read only)
+             "Quick Remarks",
+             // …and what a won (or lost) project must have (the audit asks for these)
+             ...rules.auditRequired.fields, ...rules.auditLost.fields, rules.auditFiles.field,
              // …and the custom tags an audit card is marked with
              ...(tagsIn("universe") ? [rules.tags.field] : [])],
       index: ["Project Code", "Project", "Client", "PAR"],
@@ -86,7 +88,7 @@ export function schemaSpec(rules) {
       // if one is missing, only invoice pushes stop.
       neededBy: { invoice: ["Amount (VAT-Inc.)", "Business Unit"],
                   // the audit can't ask for a column the Universe doesn't have
-                  "audit:universe": [...rules.auditRequired.fields, rules.auditFiles.field],
+                  "audit:universe": [...rules.auditRequired.fields, ...rules.auditLost.fields, rules.auditFiles.field],
                   // without a Tags column, only "Mark as …" stops (Hide on this device still works)
                   ...(tagsIn("universe") ? { "tag:universe": [rules.tags.field] } : {}) },
     },
@@ -443,11 +445,12 @@ export async function saveInvoiceDetails(call, tables, row, patch) {
 /* Fill blank cells of a Universe or ANDON row (the audit). The row is re-read
    first: a cell someone filled meanwhile is left alone (`skipped`; VAT% counts too,
    see fillPlan), and if nothing is still blank nothing is written. Then it writes,
-   reads back and compares. */
-export async function fillGaps(call, t, recordId, patch) {
+   reads back and compares. `overwrite` = cells that may be changed though not blank,
+   if they still say what the card showed ({Status: "Lost"}; see fillPlan). */
+export async function fillGaps(call, t, recordId, patch, overwrite = {}) {
   const now = await findRecord(call, t, recordId);
   if (!now) throw new Error("That row no longer exists. Refresh and try again.");
-  const { written, skipped } = fillPlan(patch, now.fields);
+  const { written, skipped } = fillPlan(patch, now.fields, overwrite);
   if (!Object.keys(written).length) {
     throw new AlreadyDone("Those cells aren't blank anymore.", "Someone filled them meanwhile. Nothing was written; the list has been refreshed.");
   }

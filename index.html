@@ -67,7 +67,7 @@
     (function () {
       var v = window.APP_BUILD = Date.now().toString(36);
       var files = ["js/config.js", "js/sync.js", "js/ops.js", "js/icons.js", "js/ui.js", "js/polaris-ui.js", "js/errors.js",
-                   "js/service.js", "js/settings.js", "js/net.js", "js/auth.js", "js/inbox.js", "js/universe.js", "js/collections.js", "js/andon.js", "js/queue.js", "js/rowdoc.js", "js/app.js"];
+                   "js/service.js", "js/settings.js", "js/net.js", "js/auth.js", "js/inbox.js", "js/universe.js", "js/collections.js", "js/andon.js", "js/sources.js", "js/queue.js", "js/rowdoc.js", "js/app.js"];
       var map = { imports: {} };
       files.forEach(function (f) { map.imports[new URL(f, location.href).href] = new URL(f + "?v=" + v, location.href).href; });
       document.write('<link rel="stylesheet" href="css/theme.css?v=' + v + '">');
@@ -159,10 +159,16 @@
             <span class="sr-only">Search the inbox</span>
             <input type="search" id="inboxSearch" placeholder="Search code, project, AM…" autocomplete="off" spellcheck="false">
           </label>
+          <!-- Filters: Client, Status, BD, AM, Tribe (js/inbox.js); the count says how many are on -->
+          <button type="button" class="icon-btn filter-btn" id="filterBtn" aria-expanded="false" aria-controls="inboxFilters" title="Filter by client, status, BD, AM or tribe">
+            <span class="i" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18l-7 8.5V19l-4 2v-7.5L3 5z"/></svg></span><span class="sr-only">Filters</span><span class="count" id="filterCount"></span>
+          </button>
           <button type="button" class="icon-btn" id="refreshBtn" aria-label="Refresh" title="Refresh">
             <span class="i" data-icon="refresh" aria-hidden="true"></span>
           </button>
         </div>
+        <div class="filters" id="inboxFilters" hidden></div>
+        <div class="filter-chips" id="filterChips" hidden></div>
         <p class="list-status" id="updated" aria-live="polite"></p>
         <div class="callout" id="loadMsg" role="alert" hidden></div>
         <div class="loader" id="loader" hidden></div>
@@ -173,7 +179,7 @@
         <p class="hidden-note" id="hiddenNote"></p>
       </section>
 
-      <section class="pane pane-universe" aria-labelledby="uniTitle">
+      <section class="pane pane-universe" data-pane="universe" aria-labelledby="uniTitle">
         <header class="page-head pane-head">
           <div>
             <!-- The title switches the table beside the list (js/app.js, the pane switcher). -->
@@ -203,7 +209,7 @@
         <p class="uni-foot" id="uniFoot"></p>
       </section>
 
-      <section class="pane pane-universe pane-collections" aria-labelledby="colTitle">
+      <section class="pane pane-universe pane-collections" data-pane="collections" aria-labelledby="colTitle">
         <header class="page-head pane-head">
           <div>
             <h2 id="colTitle"><button type="button" class="pane-switch" aria-haspopup="menu" aria-expanded="false" title="Show another table">Collections<span class="i" data-icon="caret" aria-hidden="true"></span></button></h2>
@@ -227,7 +233,7 @@
         </div>
       </section>
 
-      <section class="pane pane-universe pane-andon" aria-labelledby="andonTitle">
+      <section class="pane pane-universe pane-andon" data-pane="andon" aria-labelledby="andonTitle">
         <header class="page-head pane-head">
           <div>
             <h2 id="andonTitle"><button type="button" class="pane-switch" aria-haspopup="menu" aria-expanded="false" title="Show another table">ANDON<span class="i" data-icon="caret" aria-hidden="true"></span></button></h2>
@@ -249,6 +255,32 @@
           <div class="loader" id="andonLoader" hidden></div>
           <div class="empty small" id="andonEmpty" hidden></div>
         </div>
+      </section>
+
+      <!-- Project Brief, Project Approval or Invoice Request, picked with the switcher (js/sources.js) -->
+      <section class="pane pane-universe pane-source" data-pane="source" aria-labelledby="srcTitle">
+        <header class="page-head pane-head">
+          <div>
+            <h2 id="srcTitle"><button type="button" class="pane-switch" aria-haspopup="menu" aria-expanded="false" title="Show another table"><span id="srcName">Project Brief</span><span class="i" data-icon="caret" aria-hidden="true"></span></button></h2>
+            <p class="lede sm" id="srcSub"></p>
+          </div>
+          <div class="page-tools">
+            <label class="search search-sm">
+              <span class="i" data-icon="search" aria-hidden="true"></span>
+              <span class="sr-only" id="srcSearchLabel">Search this table</span>
+              <input type="search" id="srcSearch" placeholder="Search every column…" autocomplete="off" spellcheck="false">
+            </label>
+            <a class="icon-btn" id="srcOpen" target="_blank" rel="noopener" aria-label="Open this table in Lark" title="Open in Lark">
+              <span class="i" data-icon="external" aria-hidden="true"></span>
+            </a>
+          </div>
+        </header>
+        <div class="tbl-wrap uni-wrap">
+          <table class="tbl uni src" id="srcTable"></table>
+          <div class="loader" id="srcLoader" hidden></div>
+          <div class="empty small" id="srcEmpty" hidden></div>
+        </div>
+        <p class="uni-foot" id="srcFoot"></p>
       </section>
     </section>
 

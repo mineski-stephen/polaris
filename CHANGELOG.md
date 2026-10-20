@@ -9,6 +9,47 @@ or links stop working), add an entry here with the same number and the date,
 and say what changed in the team's words. `npm run check:shell` fails if the
 two numbers differ.
 
+## 1.6.1 · Oct 20, 2026
+
+- The **Client** filter is now a box you type in: it shows the closest matching
+  clients (with how many cards each) as you type; click one or press Enter.
+
+## 1.6.0 · Oct 20, 2026
+
+- **Filter the lists** by **Client**, **Status**, **BD**, **AM** and **Tribe**: the
+  funnel beside the search. The filters are the project's (from the Universe, Tribe
+  from ANDON if the Universe has none), apply to every tab and its count, and show as
+  chips you can clear. A new brief that isn't in the Universe yet uses its own BD and
+  AM, and counts as *No status*.
+
+## 1.5.0 · Oct 20, 2026
+
+- **Put a lost project's status right.** The Fill sheet for a *Stalled*, *Lost* or
+  *Archived* project now has a **Status** dropdown with those three, for projects
+  marked Lost by mistake. The change goes to Lark with the Fill, but only if the
+  row's Status hasn't been changed by someone else meanwhile.
+
+## 1.4.2 · Oct 20, 2026
+
+- The Fill sheet no longer spells out the rule ("A lost, stalled or archived project
+  needs …", "A won project needs …") while a required field is blank. **Fill** just
+  stays off until it's filled.
+
+## 1.4.1 · Oct 20, 2026
+
+- The Universe row beside a push sheet now shows **Quick Remarks** (it wasn't read
+  before, so it never appeared). It's also found by the Universe search.
+
+## 1.4.0 · Oct 20, 2026
+
+- **Look up briefs, PARs and invoice requests beside any list.** The table switcher
+  (▾ on the table's name) now also offers **Project Brief**, **Project Approval** and
+  **Invoice Request**: newest submitted first, searchable across every column, with
+  a link to each approval in Lark. They're read-only.
+- **New audit: lost projects.** A Universe project that's *Stalled*, *Lost* or
+  *Archived* must have a **Loss Month** and a **Reason for Loss**. If either is
+  blank it gets an Audit card (even without a brief), and the Fill needs both.
+
 ## 1.3.3 · Oct 19, 2026
 
 - The Project Brief no longer has an **MKT** column, so Polaris stopped asking for

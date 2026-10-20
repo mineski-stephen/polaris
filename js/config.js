@@ -9,7 +9,7 @@
 
 /* version: bump it with every release and add an entry to CHANGELOG.md (newest first, same number).
    The top bar shows it beside the name, so people can see at a glance which version they're running. */
-export const APP = { name: "Polaris", key: "polaris", version: "1.3.3", env: "live" };   // env: "live" | "test"
+export const APP = { name: "Polaris", key: "polaris", version: "1.6.1", env: "live" };   // env: "live" | "test"
 export const ENV_LABEL = APP.env === "test" ? "Test copy" : "";         // shown in the header, never a gate
 
 /* The connection service: the shared Lark proxy (Render). `service` is the name its
@@ -101,6 +101,16 @@ export const RULES = {
     fields: ["Sign Date", "Month"],
     // Month defaults to the 1st of the Sign Date's month (until it's changed by hand).
     month: { field: "Month", from: "Sign Date" },
+    who: "A won project",   // in "A won project needs Sign Date and Month."
+  },
+  // The audit: Universe projects that were lost (or stalled, or archived) must say
+  // when and why. Same as auditRequired: a person fills them, even without a brief,
+  // and the Fill is refused while either is blank. The status wins over the Mancom
+  // Phase: a "7. Won" project whose Status is Lost is asked for these, not Sign Date.
+  auditLost: {
+    statuses: ["Stalled", "Lost", "Archived"],
+    fields: ["Loss Month", "Reason for Loss"],
+    who: "A lost, stalled or archived project",
   },
   // The audit: Universe projects with these statuses must have the signed CE on
   // file. A blank one gets a card, and the Fill uploads the file(s) to it.

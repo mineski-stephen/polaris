@@ -6,7 +6,7 @@ import { APP, ENV_LABEL, TABLE_LINKS, RULES, SERVICES } from "./config.js";
 import { parseBaseLink, loadEverything, selectOptions, TABLE_TITLES, computedTypes, addVariable, deleteVariable } from "./ops.js";
 import {
   indexUniverse, indexCollections, briefCards, parCards, collectionCards, stepStatus, peoplePool, pmPool, auditCards, briefsByCode,
-  draftsToJSON, draftsFromJSON, variableColumns, customTagsFrom, tagGroups, tagsOf,
+  draftsToJSON, draftsFromJSON, variableColumns, customTagsFrom, tagGroups, tagsOf, filterIndex, cardFacets, passesFilters,
 } from "./sync.js";
 import { $, $$, h, ic, fillIcons, toast, fmt, store, recall, sleep, initTheme, openMenu, confirmSheet, busy } from "./ui.js";
 import { lark, wake, conn, onConn, describe, isDeadToken, LarkError, proxyHost, unreachable } from "./net.js";
@@ -16,12 +16,13 @@ import { createInbox } from "./inbox.js";
 import { createUniverse } from "./universe.js";
 import { createCollections } from "./collections.js";
 import { createAndon } from "./andon.js";
+import { createSources, SOURCE_KINDS } from "./sources.js";
 import { createQueue } from "./queue.js";
 
 const tables = Object.fromEntries(Object.entries(TABLE_LINKS).map(([k, link]) => [k, parseBaseLink(link)]));
 const KEY = { theme: "polaris.theme", tab: "polaris.tab", draft: "polaris.draft" };
 // What "Clear local data" forgets: views, hidden cards and unsent drafts, never the login or the theme.
-const LOCAL_KEYS = ["polaris.auditHidden", "polaris.uniSort", "polaris.uniCollapsed", "polaris.colSort", "polaris.colCollapsed", "polaris.andonCodeSort",
+const LOCAL_KEYS = ["polaris.auditHidden", "polaris.uniSort", "polaris.uniCollapsed", "polaris.colSort", "polaris.colCollapsed", "polaris.andonCodeSort", "polaris.srcSort",
                     "polaris.andonSort", KEY.draft];   // (andonSort: 1.2.0's, no longer read)
 const LOW_SESSION_MS = 10 * 60 * 1000;
 
@@ -63,6 +64,9 @@ const S = {
   flashCard: null,          // a card to highlight where it lands
   drafts: loadDrafts(),     // what was typed in a push sheet, kept if it's cancelled (and across a reload)
   query: { brief: "", par: "", invoice: "", andon: "", audit: "" },
+  // Inbox filters, shared by every tab until the page reloads: null = any (js/inbox.js).
+  filters: { client: null, status: null, bd: null, am: null, tribe: null },
+  filtersOpen: false,
   auditHide: new Set(recall("local", "polaris.auditHidden") || []),   // audit cards hidden on this device
 };
 
@@ -148,30 +152,36 @@ ctx.openable = (tr, table, id, label) => {
 const universe = createUniverse(ctx);
 const collections = createCollections(ctx);
 const andon = createAndon(ctx);
+const sources = createSources(ctx);
 const queue = ctx.queue = createQueue(ctx, inbox);   // Push hands its write to the queue
 
 /* ======================= the pane switcher =======================
-   The title of the table beside the list (▾) opens a menu of the three tables, to
-   look at another one without leaving the tab. Each tab remembers its pick until
-   the page is reloaded; picking the tab's own table again goes back to the default. */
-const SIDES = [["universe", "Universe", "planet"], ["collections", "Collections", "coin"], ["andon", "ANDON", "table"]];
+   The title of the table beside the list (▾) opens a menu of the tables, to look at
+   another one without leaving the tab: the three Polaris writes to, then the three
+   Lark Approval fills (read-only here). Each tab remembers its pick until the page
+   is reloaded; picking the tab's own table again goes back to the default. */
+const SIDES = [["universe", "Universe", "planet"], ["collections", "Collections", "coin"], ["andon", "ANDON", "table"], "-",
+               ["brief", "Project Brief", "file"], ["par", "Project Approval", "doneCircle"], ["invoice", "Invoice Request", "send"]];
 const sideDefault = (tab) => (tab === "invoice" ? "collections" : tab === "andon" && tables.andon ? "andon" : "universe");
 const sidePick = {};   // tab → table
 const sideOf = (tab) => sidePick[tab] || sideDefault(tab);
+// Which pane shows a table: a source table shares the one "source" pane.
+const paneOf = (side) => (SOURCE_KINDS.includes(side) ? "source" : side);
 for (const btn of $$(".pane-switch")) {
   btn.addEventListener("click", () => {
     const now = sideOf(S.tab), mine = sideDefault(S.tab);
-    openMenu(SIDES.filter(([k]) => tables[k]).map(([k, label, icon]) => ({
-      label: k === mine && k !== now ? `${label} (this tab's)` : label,
-      icon: k === now ? "check" : icon,
+    const items = SIDES.filter(s => s === "-" || tables[s[0]]).map(s => (s === "-" ? s : {
+      label: s[0] === mine && s[0] !== now ? `${s[1]} (this tab's)` : s[1],
+      icon: s[0] === now ? "check" : s[2],
       onSelect: () => {
-        if (k === now) return;
-        if (k === mine) delete sidePick[S.tab]; else sidePick[S.tab] = k;
+        if (s[0] === now) return;
+        if (s[0] === mine) delete sidePick[S.tab]; else sidePick[S.tab] = s[0];
         render();
-        const next = $(`.pane-${k === "universe" ? "universe:not(.pane-collections):not(.pane-andon)" : k} .pane-switch`);
+        const next = $(`.pane-universe[data-pane="${paneOf(s[0])}"] .pane-switch`);
         if (next) next.focus();   // the keyboard stays on the switcher, now in the new pane
       },
-    })), { anchor: btn, x: btn.getBoundingClientRect().left, y: btn.getBoundingClientRect().bottom + 6 });   // under the title, left-aligned
+    }));
+    openMenu(items, { anchor: btn, x: btn.getBoundingClientRect().left, y: btn.getBoundingClientRect().bottom + 6 });   // under the title, left-aligned
   });
 }
 
@@ -221,13 +231,16 @@ function render() {
   if (S.view === "work") {
     // On wide screens a table sits beside the list: the tab's own (Collections beside
     // Invoices, ANDON beside ANDON, the Universe otherwise), or the one picked with the switcher.
-    $("#workspace").dataset.side = sideOf(S.tab);
+    const side = sideOf(S.tab);
+    $("#workspace").dataset.side = side;
+    for (const p of $$(".pane-universe")) p.classList.toggle("is-off", p.dataset.pane !== paneOf(side));
     for (const t of $$(".tab")) {
       const on = t.dataset.tab === S.tab;
       if (on) t.setAttribute("aria-current", "page"); else t.removeAttribute("aria-current");
       const n = t.querySelector("[data-count]");
-      // Pushes waiting in the queue have left their list.
-      if (n) n.textContent = S.lists && S.lists[n.dataset.count] ? String(S.lists[n.dataset.count].cards.filter(c => !queue.hides(c)).length) : "";
+      // Pushes waiting in the queue have left their list; the filters (if any) apply to every tab's count.
+      if (n) n.textContent = S.lists && S.lists[n.dataset.count]
+        ? String(S.lists[n.dataset.count].cards.filter(c => !queue.hides(c) && passesFilters(c.facets, S.filters)).length) : "";
     }
     // On a phone the tab strip scrolls: keep the open tab in view.
     const strip = $(".tabs"), open = strip.querySelector('[aria-current="page"]');
@@ -240,6 +253,7 @@ function render() {
     universe.render();
     collections.render();
     andon.render();
+    sources.render(side);   // (only if the pane shows a source table)
   }
   if (S.view === "settings") renderSettings();
   queue.paint();      // the Queue tab, its peek and the queue page
@@ -348,6 +362,7 @@ async function loadData({ quiet = false } = {}) {
       universe.renderLoader();
       collections.renderLoader();
       andon.renderLoader();
+      sources.renderLoader();
     });
     S.data = res.data;
     S.fields = res.fields;
@@ -406,6 +421,11 @@ function recompute() {
   S.clients = [...new Set(uni.rows.map(r => r.client).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   S.statusOrder = selectOptions(field("universe", "Status"));
   S.colStatusOrder = selectOptions(field("collections", "Status"));
+  // Every card's filter values (Client, Status, BD, AM, Tribe), from its project.
+  const fidx = filterIndex(d.universe, d.andon);
+  for (const list of Object.values(S.lists)) {
+    for (const c of [...list.cards, ...(list.tagged || []).flatMap(g => g.cards)]) c.facets = cardFacets(c, fidx);
+  }
 }
 
 /* ======================= after a push ======================= */
@@ -462,10 +482,15 @@ function afterFill(c, res) {
   if (rec) Object.assign(rec.fields, res.written);
   recompute();
   render();
-  const n = Object.keys(res.written).length;
   const where = t === "andon" ? "ANDON" : "the Universe";
-  const title = `Filled ${n} missing field${n === 1 ? "" : "s"} on ${c.code} in ${where}.`;
-  const skipped = res.skipped.length ? `Someone had already filled ${res.skipped.join(", ")}, so ${res.skipped.length === 1 ? "it was" : "those were"} left as they were.` : "";
+  // A Status change (lost projects) is said apart from the blanks filled.
+  const status = res.written["Status"];
+  const n = Object.keys(res.written).length - (status ? 1 : 0);
+  const title = [n ? `Filled ${n} missing field${n === 1 ? "" : "s"} on ${c.code} in ${where}.` : "",
+                 status ? `${n ? "Its" : `${c.code}'s`} Status is now ${status}.` : ""].filter(Boolean).join(" ");
+  const filled = res.skipped.filter(k => k !== "Status");
+  const skipped = [filled.length ? `Someone had already filled ${filled.join(", ")}, so ${filled.length === 1 ? "it was" : "those were"} left as they were.` : "",
+                   res.skipped.includes("Status") ? `Someone had changed its Status in Lark meanwhile, so it was left as it is.` : ""].filter(Boolean).join(" ");
   if (res.readBackError || res.mismatches.length) {
     const list = res.mismatches.length ? res.mismatches.map(m => `${m.field}: sent “${m.want}”, Lark has “${m.got}”`).join("; ") : describe(res.readBackError);
     return { title, dest: t, warn: true, detail: `Check these in Lark: ${list}. ${skipped}`.trim() };
@@ -676,6 +701,7 @@ function reloadLocal() {
   universe.loadPrefs();
   collections.loadPrefs();
   andon.loadPrefs();
+  sources.loadPrefs();
   if (S.data) recompute();
   render();
 }

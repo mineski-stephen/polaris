@@ -178,7 +178,7 @@ test("columnsToRead: a destination table also reads its lookups and formulas; so
   const universe = [...spec.universe.read.filter(n => n !== RULES.universeIgnoreField).map(n => f(n, 1)),
     f("Contract Value (USD)", 20), f("Brief Submitted", 19), f("Linked ANDON", 21), f("Created", 1001)];
   const cols = columnsToRead("universe", universe, RULES);
-  for (const n of ["Project Code", "Contract Value (USD)", "Brief Submitted", "Linked ANDON"]) assert.ok(cols.includes(n), n);
+  for (const n of ["Project Code", "Contract Value (USD)", "Brief Submitted", "Linked ANDON", "Quick Remarks"]) assert.ok(cols.includes(n), n);
   assert.ok(!cols.includes("Created"));                               // Lark's own metadata isn't row data
   assert.ok(!cols.includes(RULES.universeIgnoreField));               // not in this table: never asked for
   // a source table reads only what its cards need
@@ -231,4 +231,18 @@ test("tags: only the tables in RULES.tags.tables use a Tags column (ANDON doesn'
   // switched on for ANDON, it would be checked the same way
   const both = schemaSpec({ ...RULES, tags: { ...RULES.tags, tables: ["universe", "andon"] } });
   assert.equal(both.andon.optional[field], 1);
+});
+
+test("fill blanks: a lost project's Status change goes out only over the status the card showed", async () => {
+  const row = universeRow({ "Status": "Lost" });
+  const lark = fakeLark([row]);
+  const res = await fillGaps(lark.call, T.universe, "recU1", { "Reason for Loss": "Paused", "Status": "Stalled" }, { Status: "Lost" });
+  assert.deepEqual(res.written, { "Reason for Loss": "Paused", "Status": "Stalled" });
+  assert.deepEqual(res.mismatches, []);
+  // changed to Archived in Lark meanwhile: left alone, reported
+  const row2 = universeRow({ "Status": "Archived" });
+  const lark2 = fakeLark([row2]);
+  const res2 = await fillGaps(lark2.call, T.universe, "recU1", { "Reason for Loss": "Paused", "Status": "Stalled" }, { Status: "Lost" });
+  assert.deepEqual(res2.skipped, ["Status"]);
+  assert.equal(row2.fields["Status"], "Archived");
 });

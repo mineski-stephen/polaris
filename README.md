@@ -58,6 +58,23 @@ phone and on a PC, and every change is made as you, with your own Lark login.
 2. **Briefs / PARs** tabs list what isn't in the Universe yet; **Invoices** lists
    every change Collections needs (see [Invoices](#invoices-the-collections-lifecycle)).
    Newest first; search narrows the list.
+
+   **Filters** (the funnel beside the search) narrow every tab by the project's
+   **Client**, **Status**, **BD**, **AM** and **Tribe**. Each card takes its project's
+   values, found by its project code: Client, Status, BD and AM from the project's
+   Universe row, and Tribe from the Universe (if it has a Tribe column) or else ANDON's
+   TRIBE. A project that isn't in the Universe yet (a new brief) takes BD and AM from
+   its brief, and has no client or status (*No status (not in the Universe)*). Each list
+   offers the values the open tab's cards have, with how many (counted with the other
+   filters on), plus "none". **Client** is a box to type in (there are too many clients
+   for a list): it shows the closest matches as you type (part of a name, or its
+   letters in order: *kstrl* finds Kestrel Motors), most cards first when it's empty;
+   click one, or Enter for the best match. Clear it and leave to go back to any client.
+   **Status** is the project's Universe Status (For Pitching,
+   Signed CE, Lost…), not the request's approval status on the card. The filters apply
+   to every tab, its count included, until the page reloads; what's on shows as chips
+   under the search (**×** each, **Clear all**), and the list's footer says how many
+   they hide. The audit's tag groups are filtered too.
 3. **Push** opens the sheet. On the left, what needs a person; on the right, the
    Lark row the push changes, as it will be: the cells it changes are highlighted
    (the old value struck through), and it follows what you pick on the left. Lookups
@@ -82,8 +99,10 @@ phone and on a PC, and every change is made as you, with your own Lark login.
    (**Collections** beside Invoices, **ANDON** beside ANDON). Narrower screens show
    the cards only. Click any row to open and change it ([the row editor](#the-row-editor)).
    To look at another table without leaving the tab, click the table's name
-   (**Universe ▾**) and pick Universe, Collections or ANDON. Each tab keeps its pick
-   until the page is reloaded; picking the tab's own table goes back to it.
+   (**Universe ▾**) and pick Universe, Collections or ANDON, or one of the tables Lark
+   Approval fills: Project Brief, Project Approval or Invoice Request
+   ([the source tables](#the-source-tables)). Each tab keeps its pick until the page is
+   reloaded; picking the tab's own table goes back to it.
 6. **Settings** (the gear next to **Queue** in the top bar): see [Settings](#settings).
 
 ---
@@ -280,12 +299,30 @@ Start / End…) for ANDON. It also lists signed projects with no signed CE on fi
 is *Fully Closed*, *For Closing*, *For Collection*, *Signed CE* or *Won - Awaiting CE
 Signature*, or whose Mancom Phase is *7. Won*, gets a card when either is blank,
 even without a brief (no brief has them, so you type them in). They can't be
-unticked, and the Fill is refused while either is still blank (*A won project needs
-Sign Date and Month.*). **Month** starts as the 1st of the Sign Date's month (the
+unticked, and the **Fill** button stays off while either is still blank (the sheet
+doesn't spell the rule out). **Month** starts as the 1st of the Sign Date's month (the
 Sign Date on the row, or the one you type; it follows the Sign Date until you change
 Month yourself). The statuses, phases and columns are `auditRequired` in
 [`js/config.js`](js/config.js); if the Universe has no column by that name, audit
 pushes to the Universe stop and the column check says which one is missing.
+
+**Lost projects must have a Loss Month and a Reason for Loss.** A Universe project
+whose Status is *Stalled*, *Lost* or *Archived* gets a card when either is blank, even
+without a brief. Like Sign Date and Month, they can't be unticked and **Fill** stays
+off while either is blank; each has the editor its column needs (a select shows the
+column's own options). The Status decides: a project in Mancom Phase *7. Won* whose
+Status is *Lost* is asked for these, not Sign Date and Month. The statuses and columns
+are `auditLost` in [`js/config.js`](js/config.js); a missing column stops audit pushes
+to the Universe, as above. (These projects are hidden from the Universe table's
+default view; search finds them.)
+
+People sometimes mark a project **Lost** when it's only stalled or archived, so these
+cards' Fill sheet has a **Status** dropdown with just those three (only the ones the
+Status column has), starting at the current one. Pick another and it's written with
+the Fill (the row beside the sheet shows the change, and the queue says *Fill 2 blanks
+and set Status to Stalled*). Status isn't a blank, so it's only changed if the row in
+Lark still says what the card showed: if someone changed it meanwhile, theirs is kept
+and the result says so.
 
 **Signed projects must have their signed CE on file.** A Universe project whose
 Status is *Fully Closed*, *For Closing*, *For Collection* or *Signed CE* gets a card
@@ -311,6 +348,7 @@ creates it).
   cell someone filled meanwhile is left alone, then everything written is read back.
 - Never audited: what a person decides (Client, BD, Other Links, Status, Mancom
   Phase, VAT% on its own, PM (LEAD), TRIBE) and what Lark computes (lookups, formulas).
+  (Status is only ever changed by hand, with the lost projects' dropdown above.)
 - **Hide ▾** (on Universe cards) opens a menu:
   - **Mark as {tag}**, one per custom tag (*No Revenue*, *Hidden*…, see
     [Settings](#settings)). It writes the tag into the Universe row's **Tags** column
@@ -362,6 +400,27 @@ row, sorted by **Project Code, Z-A** (codes start with the year and count up, so
 newest projects are on top; numbers compare as numbers, so P1000 is above P0999;
 click the column to flip it to A-Z).
 Columns: Project, Project Code, AM, PM (LEAD), TRIBE, Event Start.
+
+---
+
+## The source tables
+
+The table switcher (**▾** on any table's name) also shows the three tables Lark
+Approval fills: **Project Brief**, **Project Approval** and **Invoice Request**, newest
+submitted first (click *Submitted* to flip it). They're for looking things up, so
+they can't be changed from Polaris: each row's **↗** opens the approval in Lark, and
+the request number and project code copy when clicked.
+
+| Table | Columns |
+| ----- | ------- |
+| Project Brief | Request No., Project, Project Code, AM, Contract Value, Status, Submitted |
+| Project Approval | Request No., Project, Project Code, Status, Submitted |
+| Invoice Request | Request No., Project, Project Code, Amount, Status, Submitted |
+
+**Search** looks through every column Polaris reads from them (Remarks, Initiator
+department, Business Unit…), the same way as the other tables. Each table remembers
+its own search. Only the newest 300 rows are drawn at once (the footer says how many
+more there are); a search finds any of them.
 
 ---
 
@@ -445,7 +504,7 @@ What Polaris keeps in this browser (every key starts with `polaris.`, all values
 | `settings` | this browser | `{ "larkUrl": … }`, the saved connection service address (used on a local page only) |
 | `draft` | this browser | what you typed in a push sheet you cancelled, with its retry token, for up to 7 days. Files aren't kept. |
 | `queue` | this browser | pushes waiting in the queue (or that didn't go through): what each writes, with its retry token, for up to 2 days. Finished pushes and files that hadn't uploaded aren't kept. Not cleared by **Clear local data**: use **Remove** on the queue page. |
-| `auditHidden`, `uniSort`, `uniCollapsed`, `colSort`, `colCollapsed`, `andonCodeSort` | this browser | hidden audit cards, sort order, folded groups |
+| `auditHidden`, `uniSort`, `uniCollapsed`, `colSort`, `colCollapsed`, `andonCodeSort`, `srcSort` | this browser | hidden audit cards, sort order, folded groups |
 | `auth.token`, `auth.pending`, `auth.user` | this tab | your login, a login in progress, your name and picture. Gone when the tab closes. |
 | `override.lark` | this tab | the `?lark=` link override |
 
@@ -468,7 +527,7 @@ Polaris doesn't keep a copy of the tables: every load reads them fresh from Lark
 | ----- | ----- |
 | Page shell: state, routes, header, Settings | `index.html`, `js/app.js` |
 | Cards, push sheet, Ignore / Undo | `js/inbox.js` |
-| Universe, Collections and ANDON tables | `js/universe.js`, `js/collections.js`, `js/andon.js` |
+| Universe, Collections and ANDON tables, and the source tables | `js/universe.js`, `js/collections.js`, `js/andon.js`, `js/sources.js` |
 | Transfer rules (pure: no DOM, no network) | `js/sync.js` |
 | Every Lark read and write (takes an injected `call`) | `js/ops.js` |
 | Talking to the proxy: waking, retries, timeouts, uploads | `js/net.js` |
@@ -706,7 +765,8 @@ the live tables.
 | *Push this project's brief first.* | Use **Go to the brief**, push it, then the PAR or invoice can go. |
 | *Add this project's PAR to the Universe first.* | Use **Go to the PAR** (if it's listed), push it, then the invoice can go. |
 | *"…" changed since the list was loaded.* | Someone updated that Collections row meanwhile. Nothing was written; the list refreshed, so check the card again. The same message appears for invoice details: the cells you changed were changed in Lark first. |
-| *A won project needs Sign Date and Month.* (Fill) | Type the missing one(s) in; the Fill stays off until both have a value. |
+| **Fill** is greyed out on a won or lost project's sheet | A required field is still blank (Sign Date and Month; Loss Month and Reason for Loss). Fill them in. |
+| *A won project needs Sign Date and Month.* (queue) | The push reached the queue without them (it can't from the sheet). **Edit** it and fill them in. |
 | *Nothing was written. Status changed in Lark since the row was opened.* (queue, a row edit) | Someone changed the same cell meanwhile. **Edit** opens the row fresh from Lark with your changes; check it and push again (or **Remove**). |
 | No *Mark as …* under Hide, only *Why no “Mark as …”?* | The Universe has no **Tags** column (or your login can only read). Click it to see which; add the column (a plain text column named `Tags`) and press **Refresh**. |
 | An ANDON audit card has a plain **Hide**, no menu | That's on purpose: custom tags are Universe-only (`tags.tables` in `js/config.js`). |
@@ -786,6 +846,7 @@ design language first, copy them over unedited, then `npm run check:shell` confi
 | `js/rowdoc.js` | The row beside the push sheet: the Lark row as the push will leave it, changes highlighted. |
 | `js/universe.js` | The Universe table. |
 | `js/andon.js` | The ANDON table. |
+| `js/sources.js` | The Project Brief, Project Approval and Invoice Request tables (read-only), shown with the table switcher. |
 | `js/collections.js` | The Collections table and its invoice details sheet. |
 | `js/icons.js`, `js/ui.js` | The shared Mineski icons and UI helpers: unedited copies of `design-ref/mineski-design-language/assets/`. Change them there, then copy them over. |
 | `js/polaris-ui.js` | Polaris-only helpers on top of `ui.js`: Lark date-only days, the date field, copyable request numbers and project codes in a sentence. |

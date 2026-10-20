@@ -18,6 +18,28 @@ main { padding-bottom: 120px; }
 
 .pane-tools { display: flex; gap: 8px; align-items: center; }
 .pane-tools .search { flex: 1; }
+/* Filters (Client, Status, BD, AM, Tribe): the funnel button, its panel, and the chips of what's on */
+.filter-btn { position: relative; }
+.filter-btn .i svg { width: 100%; height: 100%; }
+.filter-btn.is-on, .filter-btn[aria-expanded="true"] { color: var(--brand-text); border-color: color-mix(in srgb, var(--brand) 45%, transparent); }
+.filter-btn .count { position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; padding: 0 5px; font-size: 11px; }
+.filter-btn .count:empty { display: none; }
+.filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 10px; margin-top: 10px; padding: 12px;
+           border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+.filters[hidden] { display: none; }
+.filter { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.filter .select, .filter select { width: 100%; min-width: 0; }
+.filter .field-label { font-size: 12px; }
+.filter-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+.filter-chips[hidden] { display: none; }
+.filter-chips .chip { max-width: 100%; }
+.filter-chips .linkish { font-size: 13px; }
+/* the Client box: the panel's whole first row (names are long); its suggestions:
+   the name, and its card count on the right */
+.filter-client { grid-column: 1 / -1; }
+.filter-client input { width: 100%; }
+.filter-client .suggest li[role="option"] { display: flex; flex-direction: row; align-items: baseline; gap: 10px; }
+.filter-client .suggest li[role="option"] small { display: inline; margin: 0 0 0 auto; color: var(--muted); font-variant-numeric: tabular-nums; }
 
 .pane-universe { margin-top: 28px; }
 .pane-head { padding: 0 0 12px; }
@@ -90,12 +112,15 @@ main { padding-bottom: 120px; }
 .uni td.c-date { color: var(--muted); white-space: nowrap; }
 .uni td.brk { display: none; }
 
-/* ---- the pane beside the list: Collections beside Invoices, ANDON beside ANDON, the Universe otherwise ---- */
-.workspace[data-side="collections"] .pane-universe:not(.pane-collections),
-.workspace[data-side="andon"] .pane-universe:not(.pane-andon),
-.workspace:not([data-side="collections"]) .pane-collections,
-.workspace:not([data-side="andon"]) .pane-andon { display: none; }
-/* the title is the switcher: "Universe ▾" opens a menu of the three tables */
+/* ---- the pane beside the list: one at a time (js/app.js marks the others is-off):
+   Collections beside Invoices, ANDON beside ANDON, the Universe otherwise, or the
+   one picked with the switcher (a source table shares the one .pane-source) ---- */
+.pane-universe.is-off { display: none; }
+.uni.src td.c-req { font: 600 12.5px/1.5 var(--mono); white-space: nowrap; }
+.uni.src td.c-project { font-weight: 650; color: var(--ink); min-width: 180px; }
+.uni.src td.c-act { width: 1%; white-space: nowrap; text-align: right; }
+.uni.src td.c-amount { white-space: nowrap; }
+/* the title is the switcher: "Universe ▾" opens a menu of the tables */
 .pane-switch { display: inline-flex; align-items: center; gap: 6px; margin: -4px -8px; padding: 4px 8px; border: 0; border-radius: 10px;
                background: none; color: inherit; font: inherit; letter-spacing: inherit; cursor: pointer; }
 .pane-switch .i { width: 18px; height: 18px; color: var(--muted); transition: transform .15s var(--ease); }
