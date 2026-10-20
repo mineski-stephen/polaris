@@ -919,36 +919,38 @@ export function matchesQuery(fields, query) {
   return words.every(w => text.includes(w));
 }
 
-/* The Universe the way the team reads it: one Year (or "all"), statuses in
-   `hidden` left out, grouped by Status in the column's option order, each group
-   sorted by RFP Received Date (rows without one go last). `query` searches every
-   column of every row of that year, the hidden statuses included: a search is
-   for finding a project, wherever it is. */
-export function universeView(records, { year = "all", hidden = [], statusOrder = [], sort = "desc", query = "" } = {}) {
+/* The Universe the way the team reads it: one Year (or "all"), grouped by Status in
+   the column's option order, each group sorted by RFP Received Date (rows without
+   one go last). The statuses in `folded` (Stalled, Lost, Archived) come last, as
+   groups marked `folded` (the table shows them folded until opened), and aren't in
+   `count` or `amount` (the pipeline's totals): `foldedCount` says how many there are.
+   `query` searches every column of every row of that year. */
+export function universeView(records, { year = "all", folded = [], statusOrder = [], sort = "desc", query = "" } = {}) {
   const all = records.map(r => [universeRow(r), r.fields]);
   const years = [...new Set(all.map(([r]) => r.year).filter(y => /^\d{4}$/.test(y)))].sort().reverse();
   const q = query.trim();
   const picked = all.filter(([r, f]) => (year === "all" || r.year === String(year)) && (!q || matchesQuery(f, q))).map(([r]) => r);
 
-  const hiddenCounts = {};
   const byStatus = new Map();
   for (const r of picked) {
-    if (!q && hidden.includes(r.status)) { hiddenCounts[r.status] = (hiddenCounts[r.status] || 0) + 1; continue; }
     if (!byStatus.has(r.status)) byStatus.set(r.status, []);
     byStatus.get(r.status).push(r);
   }
-  // Option order first, then any status the options don't list, then rows with no status.
+  // Option order first, then any status the options don't list, then rows with no status;
+  // the folded statuses after all of those, in the same order.
   const order = [...statusOrder, ...[...byStatus.keys()].filter(s => s && !statusOrder.includes(s)), ""];
+  const isFolded = (s) => folded.includes(s);
   const dir = sort === "asc" ? 1 : -1;
   const byDate = (a, b) => (a.rfp === null) - (b.rfp === null) || dir * ((a.rfp || 0) - (b.rfp || 0))
                            || a.project.localeCompare(b.project);
-  const groups = order.filter(s => byStatus.has(s)).map(status => {
+  const groups = [...order.filter(s => !isFolded(s)), ...order.filter(isFolded)].filter(s => byStatus.has(s)).map(status => {
     const rows = byStatus.get(status).sort(byDate);
-    return { status, rows, amount: round2(rows.reduce((s, r) => s + (r.amount || 0), 0)) };
+    return { status, rows, folded: isFolded(status), amount: round2(rows.reduce((s, r) => s + (r.amount || 0), 0)) };
   });
-  const shown = groups.reduce((n, g) => n + g.rows.length, 0);
-  return { groups, years, hiddenCounts, count: shown,
-           amount: round2(groups.reduce((s, g) => s + g.amount, 0)) };
+  const live = groups.filter(g => !g.folded);
+  return { groups, years, count: live.reduce((n, g) => n + g.rows.length, 0),
+           amount: round2(live.reduce((s, g) => s + g.amount, 0)),
+           foldedCount: groups.filter(g => g.folded).reduce((n, g) => n + g.rows.length, 0) };
 }
 
 /* ======================= the source tables' view ======================= */

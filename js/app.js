@@ -22,7 +22,7 @@ import { createQueue } from "./queue.js";
 const tables = Object.fromEntries(Object.entries(TABLE_LINKS).map(([k, link]) => [k, parseBaseLink(link)]));
 const KEY = { theme: "polaris.theme", tab: "polaris.tab", draft: "polaris.draft" };
 // What "Clear local data" forgets: views, hidden cards and unsent drafts, never the login or the theme.
-const LOCAL_KEYS = ["polaris.auditHidden", "polaris.uniSort", "polaris.uniCollapsed", "polaris.colSort", "polaris.colCollapsed", "polaris.andonCodeSort", "polaris.srcSort",
+const LOCAL_KEYS = ["polaris.auditHidden", "polaris.uniSort", "polaris.uniCollapsed", "polaris.uniOpened", "polaris.colSort", "polaris.colCollapsed", "polaris.andonCodeSort", "polaris.srcSort",
                     "polaris.andonSort", KEY.draft];   // (andonSort: 1.2.0's, no longer read)
 const LOW_SESSION_MS = 10 * 60 * 1000;
 

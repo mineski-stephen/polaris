@@ -1,6 +1,6 @@
-/* The Universe view: one Year (this year by default), Lost / Stalled / Archived
-   hidden, grouped by Status, sorted by RFP Received Date. A just-pushed row is
-   highlighted where it lands. */
+/* The Universe view: one Year (this year by default), grouped by Status, sorted by
+   RFP Received Date; Stalled / Lost / Archived last, folded until opened, and out of
+   the totals. A just-pushed row is highlighted where it lands. */
 
 import { UNIVERSE_VIEW } from "./config.js";
 import { universeView, universeRow } from "./sync.js";
@@ -8,7 +8,8 @@ import { $, h, ic, fmt, flash, store, recall, toast } from "./ui.js";
 import { dayOnly, copyableText } from "./polaris-ui.js";
 import { describe } from "./net.js";
 
-const KEY = { sort: "polaris.uniSort", collapsed: "polaris.uniCollapsed" };
+// collapsed: groups folded by hand; opened: folded-by-default groups (Stalled, Lost, Archived) opened by hand
+const KEY = { sort: "polaris.uniSort", collapsed: "polaris.uniCollapsed", opened: "polaris.uniOpened" };
 const COLUMNS = [
   ["c-client", "Client"], ["c-project", "Project"], ["c-amount num", "Amount (VAT-Ex.) (PHP)"],
   ["c-people c-bd", "BD"], ["c-people c-am", "AM"], ["c-code", "Project Code"], ["c-date", "RFP Received Date"],
@@ -21,6 +22,7 @@ export function createUniverse(ctx) {
   function loadPrefs() {
     U.sort = recall("local", KEY.sort) === "asc" ? "asc" : UNIVERSE_VIEW.defaultSort;
     U.collapsed = new Set(recall("local", KEY.collapsed) || []);
+    U.opened = new Set(recall("local", KEY.opened) || []);
   }
   loadPrefs();
 
@@ -55,7 +57,7 @@ export function createUniverse(ctx) {
       return;
     }
     const v = universeView(S.data.universe, {
-      year: U.year, hidden: UNIVERSE_VIEW.hiddenStatuses, statusOrder: S.statusOrder, sort: U.sort, query: U.query,
+      year: U.year, folded: UNIVERSE_VIEW.foldedStatuses, statusOrder: S.statusOrder, sort: U.sort, query: U.query,
     });
 
     // Year choices: every year in the table, this year, and all years.
@@ -68,9 +70,11 @@ export function createUniverse(ctx) {
     }
     sel.value = U.year;
 
-    $("#uniSub").textContent = `${v.count.toLocaleString()} project${v.count === 1 ? "" : "s"} · ₱${fmt.short(v.amount)} (VAT-Ex.)`;
-    const hiddenNow = UNIVERSE_VIEW.hiddenStatuses.filter(s => v.hiddenCounts[s]);
-    $("#uniFoot").textContent = hiddenNow.length ? `Not shown: ${hiddenNow.map(s => `${s} ${v.hiddenCounts[s]}`).join(" · ")}.` : "";
+    // While searching, count everything found (Stalled, Lost and Archived too); the amount stays the pipeline's.
+    const n = U.query.trim() ? v.count + v.foldedCount : v.count;
+    $("#uniSub").textContent = `${n.toLocaleString()} project${n === 1 ? "" : "s"}${U.query.trim() ? " found" : ""} · ₱${fmt.short(v.amount)} (VAT-Ex.)`;
+    $("#uniFoot").textContent = v.foldedCount
+      ? `${v.foldedCount.toLocaleString()} stalled, lost or archived at the bottom, not counted in the total above.` : "";
 
     const sortBtn = h("button", { type: "button", class: "sort-btn",
       title: U.sort === "desc" ? "Newest first. Click for oldest first." : "Oldest first. Click for newest first.",
@@ -81,21 +85,30 @@ export function createUniverse(ctx) {
                 "aria-sort": i === COLUMNS.length - 1 ? (U.sort === "desc" ? "descending" : "ascending") : null },
         i === COLUMNS.length - 1 ? sortBtn : label))));
 
-    const bodies = v.groups.map((g) => {
+    // Stalled, Lost and Archived stay folded until opened (remembered on this device);
+    // while searching they open like the others, so what's found is in view.
+    const searching = !!U.query.trim();
+    const byOpened = (g) => g.folded && !searching;
+    const isOpen = (g, name) => (byOpened(g) ? U.opened.has(name) : !U.collapsed.has(name));
+    const bodies = v.groups.map((g, i) => {
       const name = g.status || "No status";
-      const open = !U.collapsed.has(name);
+      const open = isOpen(g, name);
       const toggle = h("button", { type: "button", class: "group-btn", "aria-expanded": String(open), onclick: () => {
-        if (U.collapsed.has(name)) U.collapsed.delete(name); else U.collapsed.add(name);
+        const set = byOpened(g) ? U.opened : U.collapsed;
+        if (set.has(name)) set.delete(name); else set.add(name);
         store("local", KEY.collapsed, [...U.collapsed]);
+        store("local", KEY.opened, [...U.opened]);
         render();
       } }, ic("caret"), name, h("span", { class: "group-n" }, String(g.rows.length)),
         h("span", { class: "group-sum" }, g.amount ? "₱" + fmt.short(g.amount) : ""));
-      return h("tbody", { class: open ? "" : "is-collapsed", "data-status": name },
+      const first = g.folded && !(v.groups[i - 1] || {}).folded;   // a line above the first of them
+      return h("tbody", { class: [open ? "" : "is-collapsed", g.folded ? "is-folded" : "", first ? "is-first-folded" : ""].filter(Boolean).join(" "),
+                          "data-status": name, "data-folded": g.folded ? "1" : null },
         h("tr", { class: "group" }, h("th", { colspan: String(COLUMNS.length), scope: "rowgroup" }, toggle)),
         g.rows.map(rowEl));
     });
     table.replaceChildren(head, ...bodies);
-    empty.hidden = v.count > 0;
+    empty.hidden = v.count + v.foldedCount > 0;
     if (!S.data.universe.length) {   // a table that has never had a row
       empty.className = "empty";
       empty.replaceChildren(h("div", { class: "empty-art", "aria-hidden": "true" }, ic("table")),
@@ -137,8 +150,7 @@ export function createUniverse(ctx) {
     const id = U.highlight;
     const rec = S.data.universe.find(r => r.record_id === id);
     if (!rec) return;
-    const { year, status } = universeRow(rec);
-    if (UNIVERSE_VIEW.hiddenStatuses.includes(status)) { U.highlight = null; return; }
+    const { year } = universeRow(rec);
     if (U.year !== "all" && /^\d{4}$/.test(year) && year !== U.year) {
       U.year = year;
       toast(`Showing ${year}, the year of the project you pushed.`);
@@ -147,9 +159,10 @@ export function createUniverse(ctx) {
     const tr = $(`#uniTable tr[data-id="${id}"]`);
     if (!tr) return;
     const tbody = tr.closest("tbody");
-    if (tbody && tbody.classList.contains("is-collapsed")) {
-      U.collapsed.delete(tbody.dataset.status);
+    if (tbody && tbody.classList.contains("is-collapsed")) {   // open its group (a folded one too: Stalled, Lost, Archived)
+      if (tbody.dataset.folded && !U.query.trim()) U.opened.add(tbody.dataset.status); else U.collapsed.delete(tbody.dataset.status);
       store("local", KEY.collapsed, [...U.collapsed]);
+      store("local", KEY.opened, [...U.opened]);
       return render();
     }
     U.highlight = null;

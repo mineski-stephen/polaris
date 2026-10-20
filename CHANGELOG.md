@@ -9,6 +9,14 @@ or links stop working), add an entry here with the same number and the date,
 and say what changed in the team's words. `npm run check:shell` fails if the
 two numbers differ.
 
+## 1.6.2 · Oct 20, 2026
+
+- **Fixed:** on iPhone and iPad, tapping a date field's calendar button now opens the
+  date picker.
+- The Universe table now shows **Stalled**, **Lost** and **Archived** projects as
+  groups at the bottom, folded until you open them. They stay out of the count and
+  total at the top.
+
 ## 1.6.1 · Oct 20, 2026
 
 - The **Client** filter is now a box you type in: it shows the closest matching

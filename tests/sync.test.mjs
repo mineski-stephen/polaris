@@ -380,30 +380,33 @@ test("the BD picker offers frequent Universe BDs first", () => {
   assert.equal(pool[0].email, "ou_kirk@x.com");
 });
 
-test("Universe view: one year, hidden statuses out, grouped in option order, newest RFP first", () => {
+test("Universe view: one year, grouped in option order, newest RFP first; Stalled/Lost/Archived last, folded, not in the totals", () => {
   const row = (id, f) => rec(id, { "Project": seg(`P ${id}`), "Client": seg(`C ${id}`), "Year": seg("2026"), ...f });
   const recs = [
     row("a", { "Status": "For CE/Pitch Creation", "RFP Received Date": 300, "Amount (VAT-Ex.) (PHP)": 100 }),
     row("b", { "Status": "For CE/Pitch Creation", "RFP Received Date": 500, "Amount (VAT-Ex.) (PHP)": 50.5 }),
     row("c", { "Status": "For CE/Pitch Creation" }),                                   // no RFP date: last
     row("d", { "Status": "Fully Closed", "RFP Received Date": 100 }),
-    row("e", { "Status": "Lost", "RFP Received Date": 900 }),                          // hidden
-    row("f", { "Status": "Archived" }),                                                // hidden
+    row("e", { "Status": "Lost", "RFP Received Date": 900, "Amount (VAT-Ex.) (PHP)": 1000 }),   // folded, last
+    row("f", { "Status": "Archived" }),                                                // folded, last
     row("g", { "Status": "For CE/Pitch Creation", "Year": seg("2025"), "RFP Received Date": 999 }),
     row("h", { "RFP Received Date": 50 }),                                             // no status
     row("i", { "Status": "Brand New Status", "RFP Received Date": 70 }),
   ];
   const order = ["Fully Closed", "For CE/Pitch Creation", "Stalled", "Lost", "Archived"];
-  const v = universeView(recs, { year: "2026", hidden: ["Lost", "Stalled", "Archived"], statusOrder: order });
-  assert.deepEqual(v.groups.map(g => g.status), ["Fully Closed", "For CE/Pitch Creation", "Brand New Status", ""]);
+  const v = universeView(recs, { year: "2026", folded: ["Stalled", "Lost", "Archived"], statusOrder: order });
+  // the folded statuses come after everything else (even rows with no status), in the column's order
+  assert.deepEqual(v.groups.map(g => [g.status, g.folded]),
+    [["Fully Closed", false], ["For CE/Pitch Creation", false], ["Brand New Status", false], ["", false], ["Lost", true], ["Archived", true]]);
   assert.deepEqual(v.groups[1].rows.map(r => r.id), ["b", "a", "c"]);
   assert.equal(v.groups[1].amount, 150.5);
-  assert.deepEqual(v.hiddenCounts, { Lost: 1, Archived: 1 });
-  assert.equal(v.count, 6);
+  assert.equal(v.count, 6);                         // the totals leave them out (not pipeline)…
+  assert.equal(v.amount, 150.5);
+  assert.equal(v.foldedCount, 2);                   // …and say how many there are
   assert.deepEqual(v.years, ["2026", "2025"]);
-  const asc = universeView(recs, { year: "2026", hidden: [], statusOrder: order, sort: "asc" });
+  const asc = universeView(recs, { year: "2026", folded: [], statusOrder: order, sort: "asc" });
   assert.deepEqual(asc.groups.find(g => g.status === "For CE/Pitch Creation").rows.map(r => r.id), ["a", "b", "c"]);
-  const all = universeView(recs, { year: "all", hidden: [], statusOrder: order });
+  const all = universeView(recs, { year: "all", folded: [], statusOrder: order });
   assert.equal(all.count, 9);
   const found = universeView(recs, { year: "all", statusOrder: order, query: "c g" });
   assert.deepEqual(found.groups.flatMap(g => g.rows.map(r => r.id)), ["g"]);
@@ -883,17 +886,18 @@ test("search: the Universe finds a project in any column and any status; the def
     rec("b", { "Project": seg("Harbor Run"), "Status": "Signed CE", "Year": seg("2026"), "MKT": [user("ou_m", "Mika Market")] }),
     rec("c", { "Project": seg("Old Lumen"), "Status": "Lost", "Year": seg("2025") }),
   ];
-  const opts = { year: "2026", hidden: ["Lost"], statusOrder: [] };
-  // nothing typed: Lost stays hidden, as before
+  const opts = { year: "2026", folded: ["Lost"], statusOrder: [] };
+  const ids = (v) => v.groups.flatMap(g => g.rows.map(r => r.id));
+  // nothing typed: Lost is its own folded group, out of the totals
   const plain = universeView(rows, opts);
   assert.equal(plain.count, 1);
-  assert.deepEqual(plain.hiddenCounts, { Lost: 1 });
-  // a search looks everywhere: a hidden status, the PAR, the description, a person in any column
-  assert.deepEqual(universeView(rows, { ...opts, query: "lumen" }).groups.flatMap(g => g.rows.map(r => r.id)), ["a"]);   // the year still applies
-  assert.equal(universeView(rows, { ...opts, query: "202607030034" }).count, 1);
-  assert.equal(universeView(rows, { ...opts, query: "led wall" }).count, 1);
-  assert.equal(universeView(rows, { ...opts, query: "mika" }).count, 1);
-  assert.equal(universeView(rows, { ...opts, year: "all", query: "lumen" }).count, 2);
+  assert.equal(plain.foldedCount, 1);
+  // a search looks everywhere: a folded status, the PAR, the description, a person in any column
+  assert.deepEqual(ids(universeView(rows, { ...opts, query: "lumen" })), ["a"]);   // the year still applies
+  assert.deepEqual(ids(universeView(rows, { ...opts, query: "202607030034" })), ["a"]);
+  assert.deepEqual(ids(universeView(rows, { ...opts, query: "led wall" })), ["a"]);
+  assert.deepEqual(ids(universeView(rows, { ...opts, query: "mika" })), ["b"]);
+  assert.deepEqual(ids(universeView(rows, { ...opts, year: "all", query: "lumen" })).sort(), ["a", "c"]);
   assert.ok(matchesQuery(rows[0].fields, "fest hybrid"));                  // every word, in any column
   assert.ok(!matchesQuery(rows[0].fields, "fest harbor"));
 });

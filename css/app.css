@@ -103,6 +103,10 @@ main { padding-bottom: 120px; }
 .group-btn .group-n { color: var(--muted); font-weight: 700; }
 .group-btn .group-sum { margin-left: auto; color: var(--muted); font-weight: 700; font-variant-numeric: tabular-nums; }
 .uni tbody.is-collapsed tr.urow { display: none; }
+/* Stalled, Lost and Archived: at the bottom, a little quieter, a dashed line above the first */
+.uni tbody.is-folded .group-btn { color: var(--ink-2); }
+.uni tbody.is-folded tr.urow td { color: var(--ink-2); }
+.uni tbody.is-first-folded tr.group th { border-top: 1px dashed var(--line-2); }
 /* a line under each group (the base drops it on every tbody's last row) */
 @media (min-width: 1024px) { .uni tbody:not(:last-child) tr:last-child td { border-bottom: 1px solid var(--line); } }
 .uni td.c-project { font-weight: 650; color: var(--ink); min-width: 180px; }
@@ -184,7 +188,13 @@ main { padding-bottom: 120px; }
 .date-btn:hover { color: var(--brand-text); background: var(--surface-2); }
 .date-btn .i { width: 18px; height: 18px; }
 /* Rendered (so the picker can open under the field) but invisible. */
-.date-pick { position: absolute; left: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; border: 0; padding: 0; }
+/* Invisible, over the calendar button, so a tap on a phone lands on the real date input
+   (iOS opens its date wheel only that way). 16px text: iOS zooms in on smaller inputs. */
+.date-pick { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); z-index: 1; width: 32px; height: 32px; min-width: 0;
+             margin: 0; padding: 0; border: 0; opacity: 0; cursor: pointer; font-size: 16px; -webkit-appearance: none; appearance: none;
+             background: transparent; color: transparent; }
+.date-pick::-webkit-calendar-picker-indicator { position: absolute; inset: 0; width: auto; height: auto; margin: 0; padding: 0; cursor: pointer; }
+.date-field:has(.date-pick:hover) .date-btn { color: var(--brand-text); background: var(--surface-2); }
 .date-field.is-bad input[type="text"] { border-color: var(--danger); box-shadow: 0 0 0 3px var(--danger-soft); }
 
 /* ---- the push queue: the Queue tab and its peek ------------------------------ */

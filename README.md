@@ -313,8 +313,8 @@ off while either is blank; each has the editor its column needs (a select shows 
 column's own options). The Status decides: a project in Mancom Phase *7. Won* whose
 Status is *Lost* is asked for these, not Sign Date and Month. The statuses and columns
 are `auditLost` in [`js/config.js`](js/config.js); a missing column stops audit pushes
-to the Universe, as above. (These projects are hidden from the Universe table's
-default view; search finds them.)
+to the Universe, as above. (In the Universe table these projects are in folded groups
+at the bottom.)
 
 People sometimes mark a project **Lost** when it's only stalled or archived, so these
 cards' Fill sheet has a **Status** dropdown with just those three (only the ones the
@@ -377,9 +377,15 @@ creates it).
 
 Grouped by **Status** (in the column's own option order, each group with its count
 and total), filtered to one **Year** (this year by default; pick another or *All
-years*), **Lost, Stalled and Archived hidden**, sorted by **RFP Received Date**
-(newest first; click the column to flip it). Columns: Client, Project, Amount
-(VAT-Ex.) (PHP), BD, AM, Project Code, RFP Received Date. Groups can be folded.
+years*), sorted by **RFP Received Date** (newest first; click the column to flip it).
+Columns: Client, Project, Amount (VAT-Ex.) (PHP), BD, AM, Project Code, RFP Received
+Date. Groups can be folded.
+
+**Stalled, Lost and Archived** are groups at the **bottom**, under a dashed line,
+**folded until you open them** (each remembers being opened, on this device). They're
+not pipeline, so they're left out of the count and total at the top; the footer says
+how many there are. While searching they open like the others, and the count includes
+them. (`foldedStatuses` in `UNIVERSE_VIEW`, [`js/config.js`](js/config.js).)
 
 Shown beside the cards on wide screens only. Pushed rows appear as they land; the
 table re-reads Lark (formulas, other people's edits) when you press **Refresh**.
@@ -474,7 +480,7 @@ then reads the row back to confirm. Clearing a field empties it in Lark.
 
 **Dates.** Every date field takes a typed date (*Oct 14, 2026*, *2026-10-14*,
 *10/14/2026*, *14 Oct*…) or opens a calendar on a double-click (or the calendar
-button, handy on phones). A date Polaris can't read is outlined in red and blocks
+button: on a phone it opens the phone's own date picker). A date Polaris can't read is outlined in red and blocks
 the push until it's fixed.
 
 **Click to copy.** Request numbers, project codes, PAR numbers, invoice numbers and
@@ -504,7 +510,7 @@ What Polaris keeps in this browser (every key starts with `polaris.`, all values
 | `settings` | this browser | `{ "larkUrl": … }`, the saved connection service address (used on a local page only) |
 | `draft` | this browser | what you typed in a push sheet you cancelled, with its retry token, for up to 7 days. Files aren't kept. |
 | `queue` | this browser | pushes waiting in the queue (or that didn't go through): what each writes, with its retry token, for up to 2 days. Finished pushes and files that hadn't uploaded aren't kept. Not cleared by **Clear local data**: use **Remove** on the queue page. |
-| `auditHidden`, `uniSort`, `uniCollapsed`, `colSort`, `colCollapsed`, `andonCodeSort`, `srcSort` | this browser | hidden audit cards, sort order, folded groups |
+| `auditHidden`, `uniSort`, `uniCollapsed`, `uniOpened`, `colSort`, `colCollapsed`, `andonCodeSort`, `srcSort` | this browser | hidden audit cards, sort order, folded groups |
 | `auth.token`, `auth.pending`, `auth.user` | this tab | your login, a login in progress, your name and picture. Gone when the tab closes. |
 | `override.lark` | this tab | the `?lark=` link override |
 

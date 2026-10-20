@@ -9,7 +9,7 @@
 
 /* version: bump it with every release and add an entry to CHANGELOG.md (newest first, same number).
    The top bar shows it beside the name, so people can see at a glance which version they're running. */
-export const APP = { name: "Polaris", key: "polaris", version: "1.6.1", env: "live" };   // env: "live" | "test"
+export const APP = { name: "Polaris", key: "polaris", version: "1.6.2", env: "live" };   // env: "live" | "test"
 export const ENV_LABEL = APP.env === "test" ? "Test copy" : "";         // shown in the header, never a gate
 
 /* The connection service: the shared Lark proxy (Render). `service` is the name its
@@ -143,8 +143,10 @@ export const RULES = {
 };
 
 /* The Universe view: grouped by Status (in the column's own option order),
-   filtered to one Year (this year by default), sorted by RFP Received Date. */
+   filtered to one Year (this year by default), sorted by RFP Received Date.
+   `foldedStatuses` come last as groups folded until opened, and stay out of the
+   totals at the top (they're not pipeline). */
 export const UNIVERSE_VIEW = {
-  hiddenStatuses: ["Lost", "Stalled", "Archived"],
+  foldedStatuses: ["Stalled", "Lost", "Archived"],
   defaultSort: "desc",          // newest RFP first, so a just-pushed brief is at the top of its group
 };

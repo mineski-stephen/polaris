@@ -17,10 +17,15 @@ export const dayOnly = (ms) => (ms ? new Date(ms + OFFSET_H * 3600000)
    Manila, Lark's date-only format. onChange(ms | null, ok): null when empty;
    ok is false while the text isn't a date. */
 const toPicker = (ms) => (ms ? new Date(ms + OFFSET_H * 3600000).toISOString().slice(0, 10) : "");
+const touch = () => matchMedia("(pointer: coarse)").matches;
 export function dateField({ id, value = null, onChange = () => {} }) {
   const text = h("input", { type: "text", id, autocomplete: "off", spellcheck: "false", placeholder: "e.g. Oct 14, 2026",
                             title: "Type a date, or double-click to pick one" });
-  const pick = h("input", { type: "date", class: "date-pick", tabindex: "-1", "aria-hidden": "true" });
+  // The calendar: a real (invisible) date input laid over the button. iOS only opens
+  // its date wheel when the date input itself is tapped (showPicker() from script
+  // doesn't work there), so the tap must land on it. Elsewhere a click on it opens the
+  // picker with showPicker(); the button under it is for the keyboard (Tab, Enter).
+  const pick = h("input", { type: "date", class: "date-pick", tabindex: "-1", "aria-label": "Pick a date", title: "Pick a date" });
   const btn = h("button", { type: "button", class: "date-btn", "aria-label": "Pick a date", title: "Pick a date" }, ic("calendar"));
   const wrap = h("div", { class: "date-field" }, text, btn, pick);
   let current = value;
@@ -36,18 +41,28 @@ export function dateField({ id, value = null, onChange = () => {} }) {
     try { pick.showPicker(); } catch (e) { pick.focus(); pick.click(); }
   };
   text.addEventListener("dblclick", (e) => { e.preventDefault(); open(); });
-  btn.addEventListener("click", open);
+  btn.addEventListener("click", open);   // keyboard (and any browser where the overlay isn't hit)
+  // The picker opens on what's typed in (or the date already set), not on a stale one.
+  pick.addEventListener("pointerdown", () => { pick.value = toPicker(current); });
+  pick.addEventListener("click", (e) => {
+    if (touch()) return;                  // a phone opens its own picker on the tap itself
+    e.preventDefault();
+    open();
+  });
   text.addEventListener("input", () => {
     const ms = parseDay(text.value, OFFSET_H);
     set(Number.isNaN(ms) ? current : ms, !Number.isNaN(ms));
   });
   text.addEventListener("blur", () => { if (!wrap.classList.contains("is-bad")) show(current); });
-  pick.addEventListener("change", () => {
+  const picked = () => {
     const ms = pick.value ? Date.parse(pick.value + "T00:00:00Z") - OFFSET_H * 3600000 : null;
+    if ((ms || null) === (current || null) && !wrap.classList.contains("is-bad")) return;   // nothing new
     show(ms);
     set(ms, true);
-    text.focus();
-  });
+    if (!touch()) text.focus();           // on a phone that would pop the keyboard up
+  };
+  pick.addEventListener("change", picked);
+  pick.addEventListener("blur", picked);  // iOS doesn't always send change (e.g. Done on the first day shown)
   show(value);
   return wrap;
 }
