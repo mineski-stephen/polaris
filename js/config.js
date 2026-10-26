@@ -9,7 +9,7 @@
 
 /* version: bump it with every release and add an entry to CHANGELOG.md (newest first, same number).
    The top bar shows it beside the name, so people can see at a glance which version they're running. */
-export const APP = { name: "Polaris", key: "polaris", version: "1.7.0", env: "live" };   // env: "live" | "test"
+export const APP = { name: "Polaris", key: "polaris", version: "1.8.0", env: "live" };   // env: "live" | "test"
 export const ENV_LABEL = APP.env === "test" ? "Test copy" : "";         // shown in the header, never a gate
 
 /* The connection service: the shared Lark proxy (Render). `service` is the name its
@@ -118,10 +118,10 @@ export const RULES = {
     field: "Signed CE (PDF)",
     statuses: ["Fully Closed", "For Closing", "For Collection", "Signed CE"],
   },
-  // The audit, ANDON: a won Universe project's ANDON row must have its approval:
-  // `field` (a link column) gets the link to the project's Project Approval (the
-  // PAR's Request No.). A blank one gets a card, pre-filled with that link.
-  auditApproval: { field: "Approval" },
+  // ANDON tab: an ANDON row whose Project Code has a Project Approval gets that
+  // PAR's Request No. (its number, linking to the approval) in `field`, a link
+  // column, while it's blank: one card per row, pushed like a PAR to the Universe.
+  andonApproval: { field: "Approval" },
   // Custom tags: "Mark as No Revenue", "Mark as Hidden"… under an audit card's Hide.
   // The tags are the rows of the Variables table whose `nameColumn` is `variable`
   // (one row per tag, the tag in `valueColumn`); Settings adds and removes them.

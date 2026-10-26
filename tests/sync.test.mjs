@@ -9,7 +9,7 @@ import {
   indexUniverse, indexCollections, briefCards, parCards, collectionCards, collectionsChange,
   universeFromBrief, verifyWritten, similarity, vatMentions,
   peoplePool, universeView, shortName, andonFromBrief, collectionsView, collectionRow, invoiceDetailsPatch,
-  auditCards, auditPatch, parseDay, fillPlan, invoiceChangedSince, draftsToJSON, draftsFromJSON, queueToJSON, queueFromJSON, cellText, wonCodes, parLinks, attachmentRequest, attachmentLinkRequest, attachmentLink, isWonProject, auditMissing, monthOf,
+  auditCards, auditPatch, parseDay, fillPlan, invoiceChangedSince, draftsToJSON, draftsFromJSON, queueToJSON, queueFromJSON, cellText, parApprovals, approvalCards, attachmentRequest, attachmentLinkRequest, attachmentLink, isWonProject, auditMissing, monthOf,
   needsSignedCe, auditFilesMissing, isBlank,
   matchesQuery, andonView, canEditField, editChanges, editWrite, editCheck, editKey, writeValueOf,
   tagsOf, tagsWith, tagsWithout, variableColumns, customTagsFrom, customTagOf, tagGroups,
@@ -1145,46 +1145,39 @@ test("filters: the Client box offers the closest matches to what's typed", () =>
   assert.deepEqual(names(" KESTREL "), ["Kestrel Motors", "Acme Kestrel"]);    // any case, spaces trimmed
 });
 
-test("ANDON approval: a won project's ANDON row needs its PAR's link; the card is pre-filled with it", () => {
-  const uni = [
-    rec("u1", { "Project Code": seg("2026TEG-P0800"), "Status": "Signed CE" }),
-    rec("u2", { "Project Code": seg("2026TEG-P0801"), "Status": "For Pitching", "Mancom Phase": "7. Won" }),
-    rec("u3", { "Project Code": seg("2026TEG-P0802"), "Status": "For Pitching" }),
-    rec("u4", { "Project Code": seg("2026TEG-P0803"), "Status": "Lost", "Mancom Phase": "7. Won" }),   // lost wins over the phase
-  ];
-  assert.deepEqual([...wonCodes(uni, RULES)].sort(), ["2026TEG-P0800", "2026TEG-P0801"]);
+test("ANDON approval: an ANDON row with a Project Approval for its code gets that PAR's Request No.", () => {
   const par = (id, code, no, status, at) => rec(id, { "Project Code": seg(code), "Status": status, "Submitted at": at,
-    "Request No.": { link: `https://example.larksuite.com/approval/${no}`, text: no } });
-  const links = parLinks([
+    "Project Name": seg(`PAR ${code}`), "Request No.": { link: `https://example.larksuite.com/approval/${no}`, text: no } });
+  const pars = [
     par("p1", "2026TEG-P0800", "202609010001", "Under Review", 1790000000000),
     par("p2", "2026TEG-P0800", "202608010001", "Approved", 1780000000000),   // approved beats a newer one under review
     par("p3", "2026TEG-P0801", "202609020001", "Rejected", 1790000000000),   // void: never used
-    par("p4", "2026TEG-P0802", "202609030001", "Approved", 1790000000000),
-  ], RULES);
-  assert.deepEqual(links.get("2026TEG-P0800"), { link: "https://example.larksuite.com/approval/202608010001", text: "202608010001" });
-  assert.equal(links.has("2026TEG-P0801"), false);
+    par("p4", "2026TEG-P0802", "202609030001", "Under Review", 1790000000000),
+    par("p5", "2026TEG-P0802", "202609040001", "Under Review", 1791000000000),   // the newer of two under review
+  ];
+  const best = parApprovals(pars, RULES);
+  assert.deepEqual(best.get("2026TEG-P0800").value, { link: "https://example.larksuite.com/approval/202608010001", text: "202608010001" });
+  assert.equal(best.get("2026TEG-P0802").requestNo, "202609040001");
+  assert.equal(best.has("2026TEG-P0801"), false);
 
   const cols = ["Project", "Project Code", "Approval"].map(field_name => ({ field_name, type: field_name === "Approval" ? 15 : 1 }));
   const andon = [
-    rec("a1", { "Project Code": seg("2026TEG-P0800"), "Project": seg("Won, no approval") }),
-    rec("a2", { "Project Code": seg("2026TEG-P0801"), "Project": seg("Won by phase, no PAR") }),
-    rec("a3", { "Project Code": seg("2026TEG-P0802"), "Project": seg("Not won") }),
-    rec("a4", { "Project Code": seg("2026TEG-P0800"), "Project": seg("Won, has it"), "Approval": { link: "https://x.example/1", text: "1" } }),
+    rec("a1", { "Project Code": seg("2026TEG-P0800"), "Project": seg("Has a PAR") }),
+    rec("a2", { "Project Code": seg("2026TEG-P0800 "), "Project": seg("Same project, second row") }),   // a stray space still matches
+    rec("a3", { "Project Code": seg("2026TEG-P0801"), "Project": seg("Only a rejected PAR") }),
+    rec("a4", { "Project Code": seg("2026TEG-P0899"), "Project": seg("No PAR") }),
+    rec("a5", { "Project Code": seg("2026TEG-P0802"), "Project": seg("Already has it"), "Approval": { link: "https://x.example/1", text: "1" } }),
   ];
-  const approval = { won: wonCodes(uni, RULES), links };
-  const { cards } = auditCards("andon", andon, [], RULES, { fields: cols, approval });
-  const by = Object.fromEntries(cards.map(c => [c.rowId, c]));
-  assert.deepEqual(by.a1.gaps, ["Approval"]);
-  assert.equal(by.a3, undefined);
-  assert.equal(by.a4, undefined);
-  // pre-filled with the PAR's link, written in Lark's link format
-  assert.deepEqual(auditPatch(by.a1, andon[0], { fields: ["Approval"] }, RULES, { fields: cols }),
-    { "Approval": { link: "https://example.larksuite.com/approval/202608010001", text: "202608010001" } });
-  // no PAR to link to: still asked for, with nothing filled in
-  assert.deepEqual(by.a2.gaps, ["Approval"]);
-  assert.deepEqual(auditPatch(by.a2, andon[1], { fields: ["Approval"] }, RULES, { fields: cols }), {});
-  // an ANDON without the column isn't asked; neither is the Universe
-  assert.equal(auditCards("andon", andon, [], RULES, { fields: cols.slice(0, 2), approval }).cards.length, 0);
+  const { cards, hidden } = approvalCards(andon, pars, RULES, { fields: cols });
+  assert.deepEqual(cards.map(c => c.rowId).sort(), ["a1", "a2"]);   // won or not doesn't matter: only the PAR does
+  assert.equal(hidden.done, 1);
+  const c = cards.find(x => x.rowId === "a1");
+  assert.equal(c.kind, "approval");
+  assert.equal(c.field, "Approval");
+  assert.equal(c.requestNo, "202608010001");
+  assert.deepEqual(c.link, { link: "https://example.larksuite.com/approval/202608010001", text: "202608010001" });
+  // an ANDON without the column gets no cards
+  assert.equal(approvalCards(andon, pars, RULES, { fields: cols.slice(0, 2) }).cards.length, 0);
 });
 
 test("attachments: download addresses carry the Base's permission context", () => {

@@ -9,6 +9,14 @@ or links stop working), add an entry here with the same number and the date,
 and say what changed in the team's words. `npm run check:shell` fails if the
 two numbers differ.
 
+## 1.8.0 · Oct 26, 2026
+
+- **The ANDON approval moved to the ANDON tab, and follows the Project Approval.**
+  Any ANDON row whose project code has a Project Approval, and whose **Approval** is
+  blank, gets a card on the **ANDON** tab: **Push** adds that PAR's Request No. (its
+  number, linking to the approval in Lark). It no longer depends on the project being
+  won in the Universe, and it's no longer an Audit card.
+
 ## 1.7.0 · Oct 26, 2026
 
 - **New audit: ANDON approval.** A project that's won in the Universe must have its

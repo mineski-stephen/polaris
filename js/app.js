@@ -7,7 +7,7 @@ import { parseBaseLink, loadEverything, selectOptions, TABLE_TITLES, computedTyp
 import {
   indexUniverse, indexCollections, briefCards, parCards, collectionCards, stepStatus, peoplePool, pmPool, auditCards, briefsByCode,
   draftsToJSON, draftsFromJSON, variableColumns, customTagsFrom, tagGroups, tagsOf, filterIndex, cardFacets, passesFilters,
-  wonCodes, parLinks, attachmentRequest, attachmentLinkRequest, attachmentLink,
+  approvalCards, attachmentRequest, attachmentLinkRequest, attachmentLink,
 } from "./sync.js";
 import { $, $$, h, ic, fillIcons, toast, fmt, store, recall, sleep, initTheme, openMenu, confirmSheet, busy } from "./ui.js";
 import { lark, wake, conn, onConn, describe, isDeadToken, LarkError, proxyHost, unreachable, downloadFromBase } from "./net.js";
@@ -95,6 +95,7 @@ const field = (table, name) => ((S.fields && S.fields[table]) || []).find(f => f
 const TABLES_FOR = {
   brief: ["brief", "universe"], par: ["par", "brief", "universe"],
   invoice: ["invoice", "collections", "universe"], andon: ["brief", "andon"],
+  approval: ["par", "andon"],   // a PAR's Request No. into ANDON's Approval
   // The audit fills Universe or ANDON cells from the brief: each card checks its own table.
   audit: ["brief", "universe"], "audit:universe": ["brief", "universe"], "audit:andon": ["brief", "andon"],
   // The row editor writes to the one table the row is in.
@@ -423,6 +424,9 @@ function recompute() {
   if (d.andon) {
     S.lists.andon = briefCards(d.brief, indexUniverse(d.andon), RULES,
       { allDepartments: true, kind: "andon" });   // the same IGNORE box as the Universe
+    // …and each ANDON row's Approval, from the Project Approval with its project code.
+    const approvals = approvalCards(d.andon, d.par, RULES, { fields: fieldsOf("andon") });
+    S.lists.andon.cards = [...S.lists.andon.cards, ...approvals.cards].sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0));
     S.pmPool = pmPool(d.andon, d.universe);
   }
   // The audit: Universe and ANDON cells left blank that the brief can fill.
@@ -435,9 +439,7 @@ function recompute() {
   const tagsFor = (t) => (RULES.tags.tables.includes(t) ? { tags: S.customTags.map(x => x.tag), tagField: RULES.tags.field } : {});
   const uniAudit = auditCards("universe", d.universe, d.brief, RULES, { hide: S.auditHide, byCode, fields: fieldsOf("universe"), ...tagsFor("universe") });
   const andonAudit = d.andon ? auditCards("andon", d.andon, d.brief, RULES,
-    { hide: S.auditHide, byCode, options: ctx.optionsOf("andon"), fields: fieldsOf("andon"), ...tagsFor("andon"),
-      // A won Universe project's ANDON row needs its approval: the PAR's link.
-      approval: { won: wonCodes(d.universe, RULES), links: parLinks(d.par, RULES) } })
+    { hide: S.auditHide, byCode, options: ctx.optionsOf("andon"), fields: fieldsOf("andon"), ...tagsFor("andon") })
     : { cards: [], tagged: [], hidden: { noBrief: 0, hidden: 0 } };
   S.lists.audit = {
     cards: [...uniAudit.cards, ...andonAudit.cards].sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0)),
@@ -464,6 +466,19 @@ function afterPush(c, res, payload, extra = {}) {
   const d = S.data;
   if (c.kind === "audit") return afterFill(c, res);
   if (c.kind === "edit") return afterEdit(c, res, extra);
+  if (c.kind === "approval") {          // a PAR's Request No. went into ANDON's Approval
+    const rec = (d.andon || []).find(r => r.record_id === res.recordId);
+    if (rec) Object.assign(rec.fields, res.written);
+    recompute();
+    render();
+    const title = `Added PAR ${c.requestNo} to ANDON for ${c.code}.`;
+    if (res.readBackError || (res.mismatches && res.mismatches.length)) {
+      const list = res.mismatches && res.mismatches.length
+        ? res.mismatches.map(m => `${m.field}: sent “${m.want}”, Lark has “${m.got}”`).join("; ") : describe(res.readBackError);
+      return { title, dest: "andon", warn: true, detail: `Check these in Lark: ${list}.` };
+    }
+    return { title, dest: "andon", warn: false, detail: "" };
+  }
   if (c.kind === "brief") {
     d.universe.push({ record_id: res.recordId, fields: {
       "Project Code": payload["Project Code"], "Project": payload["Project"], "Client": payload["Client"] || "",

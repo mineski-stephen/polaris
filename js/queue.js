@@ -21,7 +21,7 @@ const KEY = "polaris.queue";
 const PEEK_MAX = 5;
 const MIN_LOGIN_MS = 60000;           // the same minute every write needs (ensureTime)
 const WHERE = { universe: "Universe", collections: "Collections", andon: "ANDON" };
-const ROUTE = { brief: "#/briefs", par: "#/pars", invoice: "#/invoices", andon: "#/andon", audit: "#/audit" };
+const ROUTE = { brief: "#/briefs", par: "#/pars", invoice: "#/invoices", andon: "#/andon", audit: "#/audit", approval: "#/andon" };
 const EDIT_ROUTE = { universe: "#/briefs", collections: "#/invoices", andon: "#/andon" };   // the tab its table sits beside
 const LISTED = ["running", "checking", "waiting"];
 
@@ -40,7 +40,8 @@ export function createQueue(ctx, inbox) {
   // An audit card marked with a custom tag is in its tag's group, not the list.
   const findCard = (it) => {
     if (it.kind === "edit") return inbox.editCard(it.cardId);
-    const list = (S.lists && S.lists[it.kind]) || { cards: [] };
+    // (approval cards sit in the ANDON tab's list)
+    const list = (S.lists && S.lists[it.kind === "approval" ? "andon" : it.kind]) || { cards: [] };
     return [...list.cards, ...(list.tagged || []).flatMap(g => g.cards)]
       .find(c => c.id === it.cardId && (c.step || "") === (it.step || ""));
   };

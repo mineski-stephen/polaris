@@ -14,6 +14,7 @@ phone and on a PC, and every change is made as you, with your own Lark login.
 | **Won project** (in the Universe, with a PAR) | a **For Invoicing** row in **Collections** |
 | **Invoice Request** (by Account Managers) | moves its Collections row along: **Pending Invoice Request Approval** when filed, **For Collection** when approved |
 | **Project Brief** (any department) | a new **ANDON** row (Project Management's board) |
+| **Project Approval (PAR)** | its Request No. in the **Approval** column of the project's ANDON row |
 
 > **Connected to the live tables.** `APP.env` in `js/config.js` is `"live"`, so the
 > header shows no *Test copy* badge and every push changes real data. See
@@ -265,6 +266,18 @@ Universe and ANDON lists.
 The request number goes into the project row's `PAR`, after any PAR already there
 (`202607030034, 202610080029`), never replacing it.
 
+### PAR → ANDON Approval
+
+On the **ANDON** tab, beside the briefs: every ANDON row whose **Project Code** has a
+Project Approval, and whose **Approval** is blank, gets a card (*PAR 202605120069 ·
+into ANDON's Approval*). Push writes that PAR's **Request No.** into Approval as a link
+to the approval in Lark, shown as its number. If a project has several PARs, it's the
+newest one that wasn't rejected or withdrawn, an Approved one first. Whether the
+project is won doesn't matter. Several ANDON rows with the same code each get the
+link. Only a blank Approval is written: if someone filled it meanwhile, theirs stays
+and the queue says so. The column is `andonApproval` in [`js/config.js`](js/config.js);
+if ANDON has no column by that name, there are no cards.
+
 ### Collections changes
 
 | Change | Collections columns written |
@@ -338,16 +351,6 @@ one meanwhile, theirs stays. The column and statuses are `auditFiles` in
 [`js/config.js`](js/config.js); if the Universe has no such column, audit pushes to
 the Universe stop and the column check says so (`npm run setup -- --apply --optional`
 creates it).
-
-**Won projects must have their approval in ANDON.** A project that's won in the
-Universe (by Status or Mancom Phase, as above; a lost one isn't) gets an ANDON card
-when its ANDON row's **Approval** is blank, even without a brief. The Fill sheet has
-it filled in with the link to the project's Project Approval: the PAR's **Request No.**
-link, from the newest PAR that wasn't rejected or withdrawn (an Approved one first),
-shown as its request number. Change it if it's the wrong one; if there's no PAR for
-the project, paste the approval's link (an `https://` address). The column is
-`auditApproval` in [`js/config.js`](js/config.js); if ANDON has no column by that name,
-nothing is asked.
 
 - **Fill** shows each blank with an editor, pre-filled from the brief. Briefs go
   out of date, so change anything before pushing (text, amounts, dates, people,

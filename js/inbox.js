@@ -254,6 +254,7 @@ export function createInbox(ctx) {
 
   function cardEl(c) {
     if (c.kind === "audit") return auditCardEl(c);
+    if (c.kind === "approval") return approvalCardEl(c);
     const writable = ctx.canWriteFor(c.kind);
     const notes = [];
     let meta;
@@ -307,6 +308,22 @@ export function createInbox(ctx) {
           title: "Adds this project to Collections with Status Invalid, so it stops showing here",
           onclick: () => openSheet(c, { invalid: true }) }, "Mark invalid") : null,
         h("button", { type: "button", class: "btn btn-tonal", disabled: !pushable, onclick: () => openSheet(c) }, "Push")));
+  }
+
+  /* An ANDON row whose project has a Project Approval: its Request No. goes into
+     ANDON's Approval (a link to the approval, shown as the number). */
+  function approvalCardEl(c) {
+    const writable = ctx.canWriteFor("approval");
+    return h("article", { class: "card item" + (S.working.has(c.id) ? " is-working" : "") + (S.entering.has(c.id) ? " is-entering" : ""),
+                          "data-id": c.id },
+      h("div", { class: "item-head" },
+        copyable(c.code, { label: "project code", cls: "code" }),
+        c.status ? h("span", { class: `badge ${BADGE[c.status] || ""}` }, c.status) : null,
+        h("span", { class: "item-date" }, c.submittedAt ? `PAR ${fmt.day(c.submittedAt)}` : "")),
+      h("h3", null, c.name || "(no name)"),
+      h("p", { class: "item-meta" }, "PAR ", copyable(c.requestNo, { label: "request number" }), ` · into ANDON's ${c.field}`),
+      h("div", { class: "item-actions" },
+        h("button", { type: "button", class: "btn btn-tonal", disabled: !writable, onclick: () => openSheet(c) }, "Push")));
   }
 
   /* Where a Collections card lands: the row (“AR name”), then From → To. */
@@ -910,11 +927,12 @@ export function createInbox(ctx) {
     }
     $("#sheetTitle").textContent = { brief: "Push to Universe", par: "Add PAR to Universe", invoice: "Add to Collections", andon: "Add to ANDON",
                                      audit: `Fill blanks in ${c.target === "andon" ? "ANDON" : "the Universe"}`,
-                                     edit: `Changes to this ${EDIT_WHERE[c.table]} row`, view: TABLE_TITLES[c.table] }[c.kind];
+                                     edit: `Changes to this ${EDIT_WHERE[c.table]} row`, view: TABLE_TITLES[c.table],
+                                     approval: "Add approval to ANDON" }[c.kind];
     $("#sheetSub").replaceChildren(copyable(c.code, { label: "project code", empty: "No code" }),
-      ...((c.kind === "par" || c.kind === "invoice" || c.kind === "view") && c.requestNo ? [" · request ", copyable(c.requestNo, { label: "request number" })] : []), ` · ${c.name}`);
+      ...((c.kind === "par" || c.kind === "invoice" || c.kind === "view" || c.kind === "approval") && c.requestNo ? [" · request ", copyable(c.requestNo, { label: "request number" })] : []), ` · ${c.name}`);
     go.querySelector(".label").textContent = { brief: "Push to Universe", par: "Add PAR", invoice: "Add to Collections", andon: "Add to ANDON", audit: "Fill",
-                                               edit: "Push changes" }[c.kind];
+                                               edit: "Push changes", approval: "Add approval" }[c.kind];
     $("#sheetError").hidden = true;
     const body = $("#sheetBody");
     body.replaceChildren();
@@ -927,6 +945,7 @@ export function createInbox(ctx) {
     else if (c.kind === "par") buildPar(body, c);
     else if (c.kind === "andon") buildAndon(body, c);
     else if (c.kind === "audit") buildAudit(body, c);
+    else if (c.kind === "approval") buildApproval(body, c);
     else buildInvoice(body, c);
     placeDoc();
     if (c.kind !== "view") paintDoc();
@@ -1015,6 +1034,13 @@ export function createInbox(ctx) {
   }
 
   /* --- PAR --- */
+  /* --- PAR → ANDON Approval: nothing to choose; the row beside it shows the change. --- */
+  function buildApproval(body, c) {
+    sheet.refresh = paintDoc;
+    put(body, c.link && c.link.link ? h("a", { class: "btn btn-sm view-open", href: c.link.link, target: "_blank", rel: "noopener" },
+      `Open ${c.requestNo || "the approval"} in Lark`, ic("external")) : null);
+  }
+
   function buildPar(body, c) {
     const refresh = paintDoc;
     sheet.refresh = refresh;
@@ -1185,6 +1211,9 @@ export function createInbox(ctx) {
     for (const list of [ch.bd, ch.pm]) (list || []).forEach(u => { names[u.id] = u.name; });
     if (ch.names instanceof Map) ch.names.forEach((n, id) => { names[id] = n; });
     const base = { code: c.code || "", name: c.name || "", names };
+    if (c.kind === "approval") {
+      return { ...base, verb: `Add PAR ${c.requestNo} to ANDON`, table: "andon", rowId: c.rowId, fields: { [c.field]: c.link } };
+    }
     if (c.kind === "edit") {
       const fields = editChanges(ctx.fieldsOf(c.table), ch.loaded || {}, ch);
       const n = Object.keys(fields).length;
@@ -1224,6 +1253,12 @@ export function createInbox(ctx) {
   async function perform(c, job, { onStatus = () => {} } = {}) {
     let res, payload, extra = {};
     const ch = job.choices;
+    if (c.kind === "approval") {
+      // Only into a blank Approval: one someone filled meanwhile is left alone (AlreadyDone).
+      payload = { [c.field]: c.link };
+      res = await fillGaps(ctx.call, ctx.tables.andon, c.rowId, payload);
+      return { res, payload, extra };
+    }
     if (c.kind === "edit") {
       // New files upload first (a failed upload writes nothing; a retry reuses the tokens).
       const defs = ctx.fieldsOf(c.table), t = ctx.tables[c.table];
