@@ -6,7 +6,7 @@ import { TABLE_TITLES, pushBrief, pushPar, pushCollections, pushAndon, setIgnore
          saveEdit, findRecord, setTag } from "./ops.js";
 import {
   universeFromBrief, collectionsChange, stepStatus, parAfterAdding, defaultVat, vatMentions,
-  people, andonFromBrief, auditPatch, auditMissing, auditFilesMissing, monthOf, clean, editChanges, editWrite,
+  people, plain, andonFromBrief, auditPatch, auditMissing, auditFilesMissing, monthOf, clean, editChanges, editWrite,
   tagsWith, tagsWithout, requiredMessage, FILTER_KEYS, NONE, passesFilters, filterChoices, closestMatches,
 } from "./sync.js";
 import { uploadSizeProblem } from "./errors.js";
@@ -416,7 +416,7 @@ export function createInbox(ctx) {
   }
   narrow.addEventListener("change", placeDoc);
   function paintDoc() {
-    if (!sheet || sheet.card.kind === "edit") return;   // the row editor paints its own (editable) row
+    if (!sheet || sheet.card.kind === "edit" || sheet.card.kind === "view") return;   // those paint their own row
     rowDoc.render(docBox, preview(sheet.card, { choices: sheet.choices, targetId: sheet.targetId, invalid: sheet.invalid }));
   }
 
@@ -691,6 +691,16 @@ export function createInbox(ctx) {
         if (k === AMOUNT) amountInput = el;
         return el;
       }
+      if (type === 15) {   // a link (ANDON's Approval): Lark takes {link, text}, never plain text
+        const el = h("input", { type: "url", id, autocomplete: "off", placeholder: "https://…" });
+        el.value = (v && v.link) || "";
+        el.addEventListener("input", () => {
+          const link = el.value.trim(), ok = !link || /^https?:\/\/\S+$/.test(link);
+          el.setAttribute("aria-invalid", String(!ok));
+          changed(k, link && ok ? { link, text: link } : null, ok);
+        });
+        return el;
+      }
       const long = /description|remarks/i.test(k) || String(v || "").length > 60;
       const el = h(long ? "textarea" : "input", long ? { id, rows: "3" } : { type: "text", id, autocomplete: "off" });
       el.value = v ?? "";
@@ -764,8 +774,44 @@ export function createInbox(ctx) {
              name: clean(f[EDIT_TITLE[table]]) || clean(f["Project"]) || "", notes: [] };
   }
   function openRecord(table, rowId) {
+    if (VIEW_ONLY.has(table)) return openView(table, rowId);
     const c = editCard(`${table}:${rowId}`);
     if (c) openSheet(c);
+  }
+
+  /* ======================= a source table's row, read-only =======================
+     Project Brief, Project Approval and Invoice Request are filled by Lark Approval,
+     so a row opened from them is only shown: the whole record, fresh from Lark, as
+     a document (its files download), with its approval one click away. */
+  const VIEW_ONLY = new Set(["brief", "par", "invoice"]);
+  function openView(table, rowId) {
+    const rec = S.data && (S.data[table] || []).find(r => r.record_id === rowId);
+    if (!rec) return;
+    const f = rec.fields || {};
+    const req = f["Request No."];
+    openSheet({ kind: "view", id: `${table}:${rowId}`, table, rowId, code: clean(f["Project Code"]),
+                name: clean(f["Project Name"]), requestNo: plain(req), link: (req && req.link) || "", notes: [] });
+  }
+  function buildView(body, c) {
+    const s = sheet;
+    s.done = true;                 // nothing to keep as a draft
+    s.blocked = "read-only";
+    put(body, c.link ? h("a", { class: "btn btn-sm view-open", href: c.link, target: "_blank", rel: "noopener" },
+      `Open ${c.requestNo || "the approval"} in Lark`, ic("external")) : null);
+    const load = async () => {
+      docBox.replaceChildren(h("div", { class: "loader" }, h("div", { class: "loader-title" }, h("span", { class: "spinner" }), "Reading the row from Lark…")));
+      try {
+        const rec = await findRecord(ctx.call, ctx.tables[c.table], c.rowId);
+        if (sheet !== s) return;
+        if (!rec) throw Object.assign(new Error("gone"), { userMessage: "That row isn't in Lark any more. Refresh to see what Lark has now." });
+        rowDoc.render(docBox, { table: c.table, loaded: rec.fields || {}, name: c.name, code: c.code });
+      } catch (err) {
+        if (sheet !== s || isDeadToken(err)) return;
+        docBox.replaceChildren(h("div", { class: "callout callout-err" }, ic("alert"), h("div", null, describe(err)),
+          h("button", { type: "button", class: "btn btn-sm", onclick: load }, "Try again")));
+      }
+    };
+    load();
   }
   const editCount = (n) => `${n} change${n === 1 ? "" : "s"}`;
 
@@ -864,22 +910,26 @@ export function createInbox(ctx) {
     }
     $("#sheetTitle").textContent = { brief: "Push to Universe", par: "Add PAR to Universe", invoice: "Add to Collections", andon: "Add to ANDON",
                                      audit: `Fill blanks in ${c.target === "andon" ? "ANDON" : "the Universe"}`,
-                                     edit: `Changes to this ${EDIT_WHERE[c.table]} row` }[c.kind];
+                                     edit: `Changes to this ${EDIT_WHERE[c.table]} row`, view: TABLE_TITLES[c.table] }[c.kind];
     $("#sheetSub").replaceChildren(copyable(c.code, { label: "project code", empty: "No code" }),
-      ...((c.kind === "par" || c.kind === "invoice") && c.requestNo ? [" · request ", copyable(c.requestNo, { label: "request number" })] : []), ` · ${c.name}`);
+      ...((c.kind === "par" || c.kind === "invoice" || c.kind === "view") && c.requestNo ? [" · request ", copyable(c.requestNo, { label: "request number" })] : []), ` · ${c.name}`);
     go.querySelector(".label").textContent = { brief: "Push to Universe", par: "Add PAR", invoice: "Add to Collections", andon: "Add to ANDON", audit: "Fill",
                                                edit: "Push changes" }[c.kind];
     $("#sheetError").hidden = true;
     const body = $("#sheetBody");
     body.replaceChildren();
-    if (c.kind === "edit") buildEdit(body, c);
+    // A read-only row has nothing to push: just Close.
+    go.hidden = c.kind === "view";
+    cancel.textContent = c.kind === "view" ? "Close" : "Cancel";
+    if (c.kind === "view") buildView(body, c);
+    else if (c.kind === "edit") buildEdit(body, c);
     else if (c.kind === "brief") buildBrief(body, c);
     else if (c.kind === "par") buildPar(body, c);
     else if (c.kind === "andon") buildAndon(body, c);
     else if (c.kind === "audit") buildAudit(body, c);
     else buildInvoice(body, c);
     placeDoc();
-    paintDoc();
+    if (c.kind !== "view") paintDoc();
     setBusy(false);
     dialog.showModal();
     const first = body.querySelector("input, select, textarea");

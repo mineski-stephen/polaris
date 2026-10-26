@@ -147,6 +147,20 @@ export function uploadToBase(file, table, token, { onProgress, timeout = UPLOAD_
   });
 }
 
+/* Download an attachment's bytes from Lark through the proxy (it passes them through
+   as they are). Resolves with a Blob; Lark answering with JSON instead (an error, or
+   a file it won't hand over) throws a LarkError with that JSON. A read: safe to retry. */
+export async function downloadFromBase(url, token, { timeout = UPLOAD_TIMEOUT_MS } = {}) {
+  const res = await send(viaProxy(url), { method: "GET", headers: { Authorization: "Bearer " + token }, cache: "no-store" }, timeout);
+  const type = res.headers.get("content-type") || "";
+  if (res.ok && !/json/i.test(type)) return res.blob();
+  const text = await res.text();
+  let json = null;
+  try { json = JSON.parse(text); } catch (e) {}
+  throw flagDead(new LarkError(json ? "Lark error" : `HTTP ${res.status}, not a file`,
+    { status: res.status, json: json || undefined, raw: json ? undefined : text.slice(0, 2000) }), token);
+}
+
 /* Wake the proxy (free Render instances sleep). Resolves true once it answers as the
    Lark proxy, false if it stays unreachable for about three minutes, or answers but
    is out of date (conn.proxy says which). Pings "/" because blockers list paths like

@@ -9,6 +9,21 @@ or links stop working), add an entry here with the same number and the date,
 and say what changed in the team's words. `npm run check:shell` fails if the
 two numbers differ.
 
+## 1.7.0 · Oct 26, 2026
+
+- **New audit: ANDON approval.** A project that's won in the Universe must have its
+  approval in ANDON. If its ANDON row's **Approval** is blank it gets an Audit card,
+  already filled in with the link to the project's Project Approval (the PAR's request
+  number, an Approved one first). Change it if it's wrong; with no PAR to link to, paste
+  the link yourself.
+- **Download attached files.** A file in any row Polaris shows (beside a push sheet,
+  in the row editor, or a brief, PAR or invoice request) is a button: click it to
+  download it. If Lark won't hand the file over directly, a link to download it
+  appears instead.
+- **Open a brief, PAR or invoice request.** In the Project Brief, Project Approval and
+  Invoice Request tables, click a row to see the whole record, every column, fresh from
+  Lark, with its approval one click away. They stay read-only.
+
 ## 1.6.2 · Oct 20, 2026
 
 - **Fixed:** on iPhone and iPad, tapping a date field's calendar button now opens the

@@ -2,14 +2,15 @@
    happens after a push. The cards live in inbox.js, the table in universe.js; the
    transfer rules in sync.js and every Lark read/write in ops.js. */
 
-import { APP, ENV_LABEL, TABLE_LINKS, RULES, SERVICES } from "./config.js";
+import { APP, ENV_LABEL, TABLE_LINKS, RULES, SERVICES, LARK } from "./config.js";
 import { parseBaseLink, loadEverything, selectOptions, TABLE_TITLES, computedTypes, addVariable, deleteVariable } from "./ops.js";
 import {
   indexUniverse, indexCollections, briefCards, parCards, collectionCards, stepStatus, peoplePool, pmPool, auditCards, briefsByCode,
   draftsToJSON, draftsFromJSON, variableColumns, customTagsFrom, tagGroups, tagsOf, filterIndex, cardFacets, passesFilters,
+  wonCodes, parLinks, attachmentRequest, attachmentLinkRequest, attachmentLink,
 } from "./sync.js";
 import { $, $$, h, ic, fillIcons, toast, fmt, store, recall, sleep, initTheme, openMenu, confirmSheet, busy } from "./ui.js";
-import { lark, wake, conn, onConn, describe, isDeadToken, LarkError, proxyHost, unreachable } from "./net.js";
+import { lark, wake, conn, onConn, describe, isDeadToken, LarkError, proxyHost, unreachable, downloadFromBase } from "./net.js";
 import { overrides, setLarkUrl, savedLarkUrl, isLocalPage, isServiceUrl } from "./settings.js";
 import * as auth from "./auth.js";
 import { createInbox } from "./inbox.js";
@@ -133,13 +134,37 @@ const ctx = {
   }),
 };
 ctx.token = () => (auth.workToken() || {}).access_token;   // for uploads, which run inside track()
+
+/* Download an attachment shown in a row (`table`: where the row lives): the bytes
+   come through the connection service, as the person, and are saved under the
+   file's own name. If Lark won't hand them over, a temporary download link from
+   Lark is offered instead (valid about a day). `btn` shows it's working. */
+ctx.downloadFile = async (table, file, btn) => {
+  const t = tables[table], tok = auth.currentToken();
+  if (!t || !file || !file.file_token || !tok) return;
+  if (btn) busy(btn, true, "Downloading…");
+  try {
+    const blob = await downloadFromBase(attachmentRequest(file, t.table, LARK.api), tok.access_token);
+    const url = URL.createObjectURL(blob);
+    h("a", { href: url, download: file.name || "file" }).click();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (err) {
+    if (isDeadToken(err)) return;   // the session already ended (net.js)
+    const json = await call("GET", attachmentLinkRequest(file, t.table, LARK.api)).catch(() => null);
+    const link = attachmentLink(json, file.file_token);
+    if (link) toast(`“${file.name}” is ready.`, { type: "success", timeout: 0, link: { href: link, text: "Download it" } });
+    else toast(`Couldn't download “${file.name}”.`, { type: "error", detail: describe(err) });
+  } finally {
+    if (btn) busy(btn, false);
+  }
+};
 const inbox = createInbox(ctx);
 /* A table row that opens its record in the row editor: a click anywhere on it (but
    not on its buttons, links or a text selection), or Enter when it has the focus. */
 ctx.openable = (tr, table, id, label) => {
   tr.classList.add("is-open");
   tr.tabIndex = 0;
-  tr.title = `Open ${label || "this row"} to view or change it`;
+  tr.title = ["brief", "par", "invoice"].includes(table) ? `Open ${label || "this row"}` : `Open ${label || "this row"} to view or change it`;
   const open = () => inbox.openRecord(table, id);
   tr.addEventListener("click", (e) => {
     if (e.target.closest("button, a, input, select, textarea, label")) return;
@@ -410,7 +435,9 @@ function recompute() {
   const tagsFor = (t) => (RULES.tags.tables.includes(t) ? { tags: S.customTags.map(x => x.tag), tagField: RULES.tags.field } : {});
   const uniAudit = auditCards("universe", d.universe, d.brief, RULES, { hide: S.auditHide, byCode, fields: fieldsOf("universe"), ...tagsFor("universe") });
   const andonAudit = d.andon ? auditCards("andon", d.andon, d.brief, RULES,
-    { hide: S.auditHide, byCode, options: ctx.optionsOf("andon"), fields: fieldsOf("andon"), ...tagsFor("andon") })
+    { hide: S.auditHide, byCode, options: ctx.optionsOf("andon"), fields: fieldsOf("andon"), ...tagsFor("andon"),
+      // A won Universe project's ANDON row needs its approval: the PAR's link.
+      approval: { won: wonCodes(d.universe, RULES), links: parLinks(d.par, RULES) } })
     : { cards: [], tagged: [], hidden: { noBrief: 0, hidden: 0 } };
   S.lists.audit = {
     cards: [...uniAudit.cards, ...andonAudit.cards].sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0)),

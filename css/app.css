@@ -86,6 +86,15 @@ main { padding-bottom: 120px; }
 .files li button:hover { color: var(--danger); }
 .files .i { width: 15px; height: 15px; }
 .file-btn { align-self: flex-start; cursor: pointer; }
+/* A file already in Lark: the whole name is a button that downloads it. */
+.files .file-dl { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 0; border: 0; background: none;
+                  color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
+.files .file-dl:hover .file-name { color: var(--brand-text); text-decoration: underline; text-underline-offset: 2px; }
+.files .file-dl .i { color: var(--brand-text); }
+.files .file-dl.is-busy { opacity: .6; cursor: progress; }
+.doc-field.is-files dd { padding: 6px; background: none; }
+/* A read-only row's sheet: its approval in Lark. */
+.view-open { align-self: flex-start; }
 
 /* ---- picker: the chosen people sit inline with the input -------------------- */
 .picker-chips { display: contents; }

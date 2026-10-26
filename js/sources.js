@@ -1,7 +1,8 @@
 /* The source tables (Project Brief, Project Approval, Invoice Request), shown beside
    the list when picked with the table switcher. They're filled by Lark Approval, so
    they're for looking things up: every row, newest submitted first, searchable
-   across every column Polaris reads. Not editable from here (Open in Lark). */
+   across every column Polaris reads. A row opens its whole record, read-only
+   (js/inbox.js openView); nothing here is editable (Open in Lark). */
 
 import { sourceView } from "./sync.js";
 import { TABLE_TITLES } from "./ops.js";
@@ -95,13 +96,13 @@ export function createSources(ctx) {
       "c-status": cell("c-status", r.status, r.dept ? `Filed by ${r.dept}` : null),
       "c-date": cell("c-date", r.submittedAt ? fmt.day(r.submittedAt) : ""),
     };
-    return h("tr", { class: "urow", "data-id": r.id },
+    return ctx.openable(h("tr", { class: "urow", "data-id": r.id },
       COLUMNS[kind].map(([cls]) => cells[cls]),
       // The approval itself, in Lark (its Request No. is a link to it).
       h("td", { class: "c-act" }, r.link ? h("a", { class: "icon-btn icon-sm", href: r.link, target: "_blank", rel: "noopener",
         title: "Open the approval in Lark", "aria-label": `Open ${r.requestNo || "the approval"} in Lark` }, ic("external")) : null),
       h("td", { class: "brk b1", "aria-hidden": "true" }),
-      h("td", { class: "brk b2", "aria-hidden": "true" }));
+      h("td", { class: "brk b2", "aria-hidden": "true" })), kind, r.id, r.name || r.requestNo);
   }
 
   return { render, renderLoader, loadPrefs };

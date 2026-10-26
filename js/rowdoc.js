@@ -11,15 +11,28 @@ import { computedTypes, TABLE_TITLES, selectOptions } from "./ops.js";
 import { RULES, LARK } from "./config.js";
 import { dateField } from "./polaris-ui.js";
 
-const TITLE_FIELD = { universe: "Project", andon: "Project", collections: "AR Name" };
+const TITLE_FIELD = { universe: "Project", andon: "Project", collections: "AR Name",
+                      brief: "Project Name", par: "Project Name", invoice: "Project Name" };
 const LONG = /description|remarks|links|notes/i;
 
 export function createRowDoc(ctx) {
   const { S } = ctx;
+  const kb = (n) => (n ? h("span", { class: "file-size" }, ` (${Math.max(1, Math.round(n / 1024)).toLocaleString()} KB)`) : null);
 
-  /* p: { table, rowId, fields (what the push writes), names, code, name } */
+  /* A file already in Lark, as a button that downloads it (ctx.downloadFile). */
+  function fileButton(table, f) {
+    return h("button", { type: "button", class: "file-dl", title: `Download ${f.name || "this file"}`,
+                         onclick: (e) => ctx.downloadFile(table, f, e.currentTarget) },
+      ic("download"), h("span", { class: "file-name" }, f.name || "file", kb(f.size)));
+  }
+  const fileList = (table, files) => h("ul", { class: "files" }, files.map(f => h("li", null, fileButton(table, f))));
+  const inLark = (v) => Array.isArray(v) && v.length > 0 && v.every(f => f && f.file_token);
+
+  /* p: { table, rowId, fields (what the push writes), names, code, name }, or for a
+     row read fresh from Lark, shown as it is (a source table's record): { table,
+     loaded (its fields), kicker }. Every column then, since all of them were read. */
   function render(box, p) {
-    const rec = p.rowId ? (S.data[p.table] || []).find(r => r.record_id === p.rowId) : null;
+    const rec = p.loaded ? { fields: p.loaded } : p.rowId ? (S.data[p.table] || []).find(r => r.record_id === p.rowId) : null;
     const now = rec ? rec.fields : {};
     const writes = p.fields || {};
     const names = p.names || {};
@@ -27,7 +40,7 @@ export function createRowDoc(ctx) {
       || ((S.pmPool || []).find(u => u.id === id) || {}).name || "";
     const show = (def, v) => cellText(def, v, { nameOf, offsetHours: RULES.utcOffsetHours });
     // Only columns Polaris read (null: all), so nothing looks blank just because it wasn't loaded.
-    const read = (S.columns || {})[p.table];
+    const read = p.loaded ? null : (S.columns || {})[p.table];
     const known = Array.isArray(read) ? new Set(read) : null;
     const defs = ctx.fieldsOf(p.table).filter(d => {
       const k = d.field_name;
@@ -43,16 +56,18 @@ export function createRowDoc(ctx) {
       const after = k in writes ? show(d, writes[k]) : before;
       const changed = !!rec && after !== before;
       const wide = d.type === 17 || LONG.test(k) || after.length > 48 || after.includes("\n");
-      return h("div", { class: `doc-field${wide ? " is-wide" : ""}${changed ? " is-change" : ""}` },
+      // Files already in Lark download from here; ones a push is adding show by name.
+      const files = d.type === 17 && !changed && inLark(now[k]);
+      return h("div", { class: `doc-field${wide ? " is-wide" : ""}${changed ? " is-change" : ""}${files ? " is-files" : ""}` },
         h("dt", null, k),
-        h("dd", null, changed && before ? h("del", null, before) : null, after));
+        h("dd", null, files ? fileList(p.table, now[k]) : [changed && before ? h("del", null, before) : null, after]));
     });
 
     const title = value(TITLE_FIELD[p.table]) || p.name || "";
     const meta = [p.code || value("Project Code"), value("Status")].filter(Boolean).join(" · ");
     box.replaceChildren(
       h("header", { class: "doc-head" },
-        h("p", { class: "doc-kicker" }, rec ? TABLE_TITLES[p.table] : `${TABLE_TITLES[p.table]} · New row`),
+        h("p", { class: "doc-kicker" }, p.kicker || (rec ? TABLE_TITLES[p.table] : `${TABLE_TITLES[p.table]} · New row`)),
         h("h3", null, plain(title) || "(no name)"),
         meta ? h("p", { class: "doc-meta" }, meta) : null),
       h("div", { class: "doc-body" }, h("dl", { class: "doc-fields" }, fields)));
@@ -152,12 +167,11 @@ export function createRowDoc(ctx) {
     function filesEditor(def, id) {
       const k = def.field_name;
       const list = h("ul", { class: "files" });
-      const kb = (n) => (n ? h("span", { class: "file-size" }, ` (${Math.max(1, Math.round(n / 1024)).toLocaleString()} KB)`) : null);
       const paint = () => {
         const kept = current(def) || [];
         const fresh = choices.files.filter(f => f.field === k);
         list.replaceChildren(
-          ...kept.map((f, i) => h("li", null, ic("link"), h("span", { class: "file-name" }, f.name, kb(f.size)),
+          ...kept.map((f, i) => h("li", null, f.file_token ? fileButton(table, f) : [ic("link"), h("span", { class: "file-name" }, f.name, kb(f.size))],
             h("button", { type: "button", "aria-label": `Remove ${f.name}`, title: "Remove", onclick: () => {
               const next = kept.filter((_, j) => j !== i);
               set(k, next.length ? next : null);
@@ -195,7 +209,7 @@ export function createRowDoc(ctx) {
       const dd = editable ? h("dd", { class: "is-edit" }, editor(def))
         : h("dd", { class: "is-locked", title: computedTypes.has(def.type)
             ? `Lark works this out (${what}), so it can't be changed here.` : `${what} columns can't be changed from Polaris.` },
-            show(def, loaded[k]));
+            def.type === 17 && inLark(loaded[k]) ? fileList(table, loaded[k]) : show(def, loaded[k]));
       const wide = def.type === 17 || def.type === 4 || LONG.test(k) || String(plain(loaded[k])).length > 48;
       const el = h("div", { class: `doc-field${wide ? " is-wide" : ""}${editable ? "" : " is-locked"}`, "data-field": k },
         h("dt", null, k, editable ? null : h("span", { class: "doc-tag" }, what)),

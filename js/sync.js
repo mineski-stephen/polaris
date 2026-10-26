@@ -748,7 +748,42 @@ export function customTagOf(fields, tagField, tags) {
    column the table doesn't have isn't asked for). `tags` = the custom tags: a row
    marked with one (in `tagField`) leaves the list for `tagged`, card.tag saying which.
    Returns { cards, tagged, hidden: { noBrief, hidden } }. */
-export function auditCards(target, records, briefs, rules, { hide = new Set(), options, fields, byCode, tags = [], tagField } = {}) {
+/* ======================= the ANDON approval ======================= */
+
+/* Project codes of the Universe's won projects (by Status or Mancom Phase, unless
+   the Status says lost), for the ANDON approval audit. */
+export function wonCodes(universe, rules) {
+  const out = new Set();
+  for (const r of universe || []) {
+    const f = r.fields || {};
+    const code = normCode(plain(f["Project Code"]));
+    if (code && isWonProject(f, rules) && !isLostProject(f, rules)) out.add(code);
+  }
+  return out;
+}
+
+/* Each project's Project Approval, as the link ANDON's approval column takes
+   ({link, text}: the approval in Lark, shown as its request number), by project
+   code. The newest PAR that wasn't rejected or withdrawn; an Approved one wins
+   over one still under review. */
+export function parLinks(pars, rules) {
+  const best = new Map();
+  for (const r of pars || []) {
+    const f = r.fields || {};
+    const code = normCode(plain(f["Project Code"]));
+    const link = f["Request No."] && typeof f["Request No."].link === "string" ? f["Request No."].link : "";
+    const status = clean(f["Status"]);
+    if (!code || !/^https:\/\//.test(link) || rules.voidStatuses.includes(status)) continue;
+    const rank = [status === rules.approvedStatus ? 1 : 0, num(f["Submitted at"]) || 0];
+    const cur = best.get(code);
+    if (!cur || rank[0] > cur.rank[0] || (rank[0] === cur.rank[0] && rank[1] > cur.rank[1])) {
+      best.set(code, { rank, value: { link, text: requestNo(f["Request No."]) || link } });
+    }
+  }
+  return new Map([...best].map(([code, b]) => [code, b.value]));
+}
+
+export function auditCards(target, records, briefs, rules, { hide = new Set(), options, fields, byCode, tags = [], tagField, approval } = {}) {
   const briefFor = byCode || briefsByCode(briefs, rules);
   const cards = [], tagged = [], hidden = { noBrief: 0, hidden: 0 };
   const seen = new Set();
@@ -763,11 +798,15 @@ export function auditCards(target, records, briefs, rules, { hide = new Set(), o
     const af = rules.auditFiles;
     const files = target === "universe" && af && needsSignedCe(f, rules) && (!has || has.has(af.field)) && isBlank(f[af.field])
       ? [af.field] : [];
+    // ANDON: a won project's row needs its approval (the PAR's link), even without a brief.
+    const ap = rules.auditApproval;
+    const approvalGap = target === "andon" && ap && approval && approval.won.has(code)
+      && (!has || has.has(ap.field)) && isBlank(f[ap.field]) ? [ap.field] : [];
     const b = briefFor.get(code);
-    if (!b && !required.length && !files.length) { hidden.noBrief++; continue; }
+    if (!b && !required.length && !files.length && !approvalGap.length) { hidden.noBrief++; continue; }
     const brief = b ? briefAsCard(b) : null;
     const want = brief ? fromBrief(target, brief, row, rules, { options, fields }) : {};
-    const gaps = [...new Set([...Object.keys(want).filter(k => !AUDIT_SKIP[target].has(k) && isBlank(f[k])), ...required, ...files])];
+    const gaps = [...new Set([...Object.keys(want).filter(k => !AUDIT_SKIP[target].has(k) && isBlank(f[k])), ...required, ...files, ...approvalGap])];
     if (!gaps.length) continue;
     const id = `${target}:${row.record_id}`;
     if (seen.has(id)) continue;
@@ -782,6 +821,8 @@ export function auditCards(target, records, briefs, rules, { hide = new Set(), o
       // The amount needs a VAT rate; the row has none, so the sheet asks for it.
       needsVat: !!brief && target === "universe" && gaps.includes("Amount (VAT-Ex.) (PHP)") && !clean(f["VAT%"]),
       notes: [], blocked: "",
+      // Values that don't come from the brief: the PAR's link for ANDON's approval.
+      prefill: approvalGap.length && approval.links.get(code) ? { [ap.field]: approval.links.get(code) } : {},
     };
     card.hideKey = `${id}|${gaps.join(",")}`;
     // Marked with a custom tag: it goes to that tag's group (shared, unlike Hide).
@@ -808,7 +849,8 @@ export function tagGroups(tagged, tags) {
    `choices.vat` = the VAT rate when the row has none (then VAT% is written with the amount).
    `choices.files` = the files for an attachment gap (card.files): [{name, size, file_token?}]. */
 export function auditPatch(card, row, choices, rules, { options, fields } = {}) {
-  const want = card.brief ? fromBrief(card.target, card.brief, row, rules, { vat: choices.vat, options, fields }) : {};
+  const want = { ...(card.prefill || {}),
+                 ...(card.brief ? fromBrief(card.target, card.brief, row, rules, { vat: choices.vat, options, fields }) : {}) };
   const pick = choices.fields || card.gaps;
   const out = {};
   for (const k of pick) {
@@ -1628,4 +1670,27 @@ export function cellText(def, v, { nameOf = () => "", offsetHours = 8 } = {}) {
     return String(x);
   };
   return (Array.isArray(v) ? v : [v]).map(one).filter(Boolean).join(", ");
+}
+
+/* ======================= attachments ======================= */
+/* Where to fetch an attachment's bytes (through the proxy, as the person): the cell's
+   own download address when Lark gave one, else Lark's media download with the
+   Base's permission context, which an advanced-permission Base needs. */
+export function attachmentRequest(file, tableId, api) {
+  const endpoint = `${api}/drive/v1/medias/${encodeURIComponent(file.file_token)}/download`;
+  if (typeof file.url === "string" && (file.url === endpoint || file.url.startsWith(`${endpoint}?`))) return file.url;
+  return `${endpoint}?extra=${encodeURIComponent(JSON.stringify({ bitablePerm: { tableId } }))}`;
+}
+/* The fallback when Lark won't hand the bytes to the proxy: ask for a temporary
+   download link (valid about a day) instead. */
+export function attachmentLinkRequest(file, tableId, api) {
+  const base = `${api}/drive/v1/medias/batch_get_tmp_download_url`;
+  if (typeof file.tmp_url === "string" && file.tmp_url.startsWith(`${base}?`)) return file.tmp_url;
+  return `${base}?file_tokens=${encodeURIComponent(file.file_token)}&extra=${encodeURIComponent(JSON.stringify({ bitablePerm: { tableId } }))}`;
+}
+export function attachmentLink(json, fileToken) {
+  const urls = (json && json.data && json.data.tmp_download_urls) || [];
+  const hit = urls.find(u => u && u.file_token === fileToken) || (urls.length === 1 ? urls[0] : null);
+  const link = hit && typeof hit.tmp_download_url === "string" ? hit.tmp_download_url : "";
+  return /^https:\/\//.test(link) ? link : "";
 }

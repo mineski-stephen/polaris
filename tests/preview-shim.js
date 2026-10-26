@@ -67,6 +67,16 @@
     var f = await fixture();
     if (/\/authen\/v1\/authorize/.test(target)) return new Response("<html>preview</html>", { status: 200 });
     if (/\/authen\/v1\/user_info/.test(target)) return reply({ code: 0, data: { name: "Preview Mode" } });
+    // An attachment's bytes: a small stand-in file (nothing comes from Lark).
+    var dl = target.match(/\/drive\/v1\/medias\/([^/?]+)\/download/);
+    if (dl) {
+      return new Promise(function (res) {
+        setTimeout(function () {
+          res(new Response("Preview mode: a stand-in for file " + decodeURIComponent(dl[1]) + ".",
+                           { status: 200, headers: { "Content-Type": "application/octet-stream" } }));
+        }, 300);
+      });
+    }
     var t = target.match(/\/tables\/(tbl[A-Za-z0-9]+)\/(fields|records)(\/[a-z_]+)?/);
     if (!t) return reply({ code: 99999, msg: "preview mode: no answer for " + target });
     var key = keyOf(f, t[1]);

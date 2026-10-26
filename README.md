@@ -339,6 +339,16 @@ one meanwhile, theirs stays. The column and statuses are `auditFiles` in
 the Universe stop and the column check says so (`npm run setup -- --apply --optional`
 creates it).
 
+**Won projects must have their approval in ANDON.** A project that's won in the
+Universe (by Status or Mancom Phase, as above; a lost one isn't) gets an ANDON card
+when its ANDON row's **Approval** is blank, even without a brief. The Fill sheet has
+it filled in with the link to the project's Project Approval: the PAR's **Request No.**
+link, from the newest PAR that wasn't rejected or withdrawn (an Approved one first),
+shown as its request number. Change it if it's the wrong one; if there's no PAR for
+the project, paste the approval's link (an `https://` address). The column is
+`auditApproval` in [`js/config.js`](js/config.js); if ANDON has no column by that name,
+nothing is asked.
+
 - **Fill** shows each blank with an editor, pre-filled from the brief. Briefs go
   out of date, so change anything before pushing (text, amounts, dates, people,
   Business Unit, Tools); untick any you'd rather leave blank (except a won
@@ -415,7 +425,9 @@ The table switcher (**▾** on any table's name) also shows the three tables Lar
 Approval fills: **Project Brief**, **Project Approval** and **Invoice Request**, newest
 submitted first (click *Submitted* to flip it). They're for looking things up, so
 they can't be changed from Polaris: each row's **↗** opens the approval in Lark, and
-the request number and project code copy when clicked.
+the request number and project code copy when clicked. **Click a row** (or press Enter
+on it) to see the whole record, every column, read fresh from Lark, read-only, with
+**Open … in Lark** for its approval and **Close**.
 
 | Table | Columns |
 | ----- | ------- |
@@ -444,7 +456,12 @@ column (not only the ones the table shows), and every typed one can be changed:
 | Date | the date field (see *Dates* below); it sets the day, at midnight Manila |
 | Person | pick from everyone Polaris knows (the row's own people first) |
 | Checkbox, URL | a tick box, an address |
-| Attachment | the files it has (× takes one out) and **Add files** (up to 10 MB each) |
+| Attachment | the files it has (click one to download it; × takes it out) and **Add files** (up to 10 MB each) |
+
+**Files download from any row Polaris shows** (beside a push sheet, in the row editor,
+or a source table's record): click the file. It comes through the connection service,
+as you, and saves under its own name; if Lark won't hand it over that way, a message
+offers a temporary download link from Lark instead (valid about a day).
 
 What Lark works out itself (**Formula**, **Lookup**, links, created/modified, auto
 numbers) is shown with a tag and can't be changed. Clearing a cell empties it in Lark.
@@ -852,7 +869,7 @@ design language first, copy them over unedited, then `npm run check:shell` confi
 | `js/rowdoc.js` | The row beside the push sheet: the Lark row as the push will leave it, changes highlighted. |
 | `js/universe.js` | The Universe table. |
 | `js/andon.js` | The ANDON table. |
-| `js/sources.js` | The Project Brief, Project Approval and Invoice Request tables (read-only), shown with the table switcher. |
+| `js/sources.js` | The Project Brief, Project Approval and Invoice Request tables (read-only), shown with the table switcher; a row opens read-only (`inbox.js` `openView`). |
 | `js/collections.js` | The Collections table and its invoice details sheet. |
 | `js/icons.js`, `js/ui.js` | The shared Mineski icons and UI helpers: unedited copies of `design-ref/mineski-design-language/assets/`. Change them there, then copy them over. |
 | `js/polaris-ui.js` | Polaris-only helpers on top of `ui.js`: Lark date-only days, the date field, copyable request numbers and project codes in a sentence. |
