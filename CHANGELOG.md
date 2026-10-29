@@ -9,6 +9,11 @@ or links stop working), add an entry here with the same number and the date,
 and say what changed in the team's words. `npm run check:shell` fails if the
 two numbers differ.
 
+## 1.9.4 · Oct 29, 2026
+
+- **Changed:** a people picker's list stays closed when the push form opens. It
+  opens when you click the picker or start typing (or press the down arrow).
+
 ## 1.9.3 · Oct 29, 2026
 
 - **Fixed:** the list of people under a picker (PM, BD, AM) was cut off inside

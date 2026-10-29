@@ -1479,7 +1479,8 @@ export function createInbox(ctx) {
     const input = h("input", { type: "text", id, autocomplete: "off", placeholder, role: "combobox",
                                "aria-autocomplete": "list", "aria-expanded": "false" });
     const chips = h("span", { class: "picker-chips" });
-    const box = h("div", { class: "picker-box", onclick: () => input.focus() }, chips, input);
+    // The list opens on a click or typing, not on focus: the sheet focuses its first field as it opens.
+    const box = h("div", { class: "picker-box", onclick: () => { input.focus(); show(); } }, chips, input);
     const list = h("ul", { class: "suggest", role: "listbox", hidden: true });
     const wrap = h("div", { class: "picker" }, box, list);
     const float = floatList(list, box);
@@ -1511,11 +1512,11 @@ export function createInbox(ctx) {
       if (list.hidden) float.close(); else float.open();
       input.setAttribute("aria-expanded", String(!list.hidden));
     };
-    input.addEventListener("focus", show);
     input.addEventListener("input", show);
     input.addEventListener("blur", close);
     input.addEventListener("keydown", (e) => {
       if (e.key === "Backspace" && !input.value && chosen.length) { chosen.pop(); paintChips(); onChange([...chosen]); return; }
+      if (e.key === "ArrowDown" && list.hidden) { e.preventDefault(); show(); return; }
       keyNav(e, list, () => items.length, (i) => { active = i; return active; }, () => active,
         () => { if (active >= 0) add(items[active]); else if (items.length === 1) add(items[0]); }, close);
     });
