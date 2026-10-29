@@ -295,7 +295,7 @@ function initials(name) {
 }
 
 function renderHeader() {
-  $("#appVersion").textContent = `v${APP.version}`;
+  $("#appVersion").textContent = $("#loginVersion").textContent = `v${APP.version}`;
   $("#appVersion").title = `${APP.name} version ${APP.version}`;
   const signedIn = !!auth.currentToken();
   $("#envBadge").hidden = !ENV_LABEL;

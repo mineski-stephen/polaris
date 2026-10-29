@@ -9,6 +9,11 @@ or links stop working), add an entry here with the same number and the date,
 and say what changed in the team's words. `npm run check:shell` fails if the
 two numbers differ.
 
+## 1.9.2 · Oct 29, 2026
+
+- **Changed:** the login page shows the version under the name instead of a
+  line about what Polaris does, the same as Fetch.
+
 ## 1.9.1 · Oct 29, 2026
 
 - **Fixed:** when a column the Audit needs is missing (for example the Universe's
