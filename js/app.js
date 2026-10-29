@@ -7,7 +7,7 @@ import { parseBaseLink, loadEverything, selectOptions, TABLE_TITLES, computedTyp
 import {
   indexUniverse, indexCollections, briefCards, parCards, collectionCards, stepStatus, peoplePool, pmPool, auditCards, briefsByCode,
   draftsToJSON, draftsFromJSON, variableColumns, customTagsFrom, tagGroups, tagsOf, filterIndex, cardFacets, passesFilters,
-  approvalCards, attachmentRequest, attachmentLinkRequest, attachmentLink,
+  approvalCards, pmCards, attachmentRequest, attachmentLinkRequest, attachmentLink,
 } from "./sync.js";
 import { $, $$, h, ic, fillIcons, toast, fmt, store, recall, sleep, initTheme, openMenu, confirmSheet, busy } from "./ui.js";
 import { lark, wake, conn, onConn, describe, isDeadToken, LarkError, proxyHost, unreachable, downloadFromBase } from "./net.js";
@@ -48,7 +48,8 @@ function loadDrafts() {
 /* ======================= state ======================= */
 const S = {
   view: "login",            // login | busy | work | settings
-  tab: ["brief", "par", "invoice", "andon", "audit"].includes(recall("local", KEY.tab)) ? recall("local", KEY.tab) : "brief",
+  // (Briefs and PARs were tabs of their own until 1.9.0: either opens the Universe tab now.)
+  tab: ["universe", "invoice", "andon", "audit"].includes(recall("local", KEY.tab)) ? recall("local", KEY.tab) : "universe",
   show: "inbox",            // on narrow screens: inbox | universe
   data: null,               // { universe, collections, brief, par, invoice }: records as read
   fields: null,
@@ -64,7 +65,7 @@ const S = {
   entering: new Set(),      // cards that just came back (Undo): animate once
   flashCard: null,          // a card to highlight where it lands
   drafts: loadDrafts(),     // what was typed in a push sheet, kept if it's cancelled (and across a reload)
-  query: { brief: "", par: "", invoice: "", andon: "", audit: "" },
+  query: { universe: "", brief: "", par: "", invoice: "", andon: "", audit: "" },
   // Inbox filters, shared by every tab until the page reloads: null = any (js/inbox.js).
   filters: { client: null, status: null, bd: null, am: null, tribe: null },
   filtersOpen: false,
@@ -95,7 +96,9 @@ const field = (table, name) => ((S.fields && S.fields[table]) || []).find(f => f
 const TABLES_FOR = {
   brief: ["brief", "universe"], par: ["par", "brief", "universe"],
   invoice: ["invoice", "collections", "universe"], andon: ["brief", "andon"],
+  universe: ["brief", "par", "universe"],   // the Universe tab: briefs and PARs
   approval: ["par", "andon"],   // a PAR's Request No. into ANDON's Approval
+  pm: ["universe", "andon"],    // one PM in both
   // The audit fills Universe or ANDON cells from the brief: each card checks its own table.
   audit: ["brief", "universe"], "audit:universe": ["brief", "universe"], "audit:andon": ["brief", "andon"],
   // The row editor writes to the one table the row is in.
@@ -212,15 +215,17 @@ for (const btn of $$(".pane-switch")) {
 }
 
 /* ======================= routes ======================= */
-const ROUTES = { "": "brief", briefs: "brief", pars: "par", invoices: "invoice", andon: "andon", audit: "audit", universe: "brief", collections: "invoice", settings: "settings", queue: "queue" };
-const parseRoute = () => ROUTES[(location.hash.match(/^#\/?([a-z]*)/) || [])[1] || ""] || "brief";
+// #/briefs and #/pars (the tabs before 1.9.0) open the Universe tab, so old links still work.
+const ROUTES = { "": "universe", universe: "universe", briefs: "universe", pars: "universe", invoices: "invoice", andon: "andon",
+                 audit: "audit", collections: "invoice", settings: "settings", queue: "queue" };
+const parseRoute = () => ROUTES[(location.hash.match(/^#\/?([a-z]*)/) || [])[1] || ""] || "universe";
 
 function onRoute() {
   const r = parseRoute();
   if (r === "settings") S.view = "settings";
   else if (!auth.currentToken()) {
     S.view = "login";
-    S.returnTo = location.hash || "#/briefs";
+    S.returnTo = location.hash || "#/universe";
   } else {
     if (r === "queue") {
       S.view = "queue";
@@ -234,7 +239,7 @@ function onRoute() {
     S.tab = r;
     store("local", KEY.tab, r);
   }
-  $("#workLink").href = S.lastWork || "#/briefs";
+  $("#workLink").href = S.lastWork || "#/universe";
   render();
   // Load as soon as there's a login, whatever page this is, so the lists are ready.
   if (auth.currentToken() && !S.data && !S.loading && !S.loadError) loadData();
@@ -242,7 +247,7 @@ function onRoute() {
 }
 
 /* ======================= rendering ======================= */
-const TAB_TITLES = { brief: "Briefs", par: "PARs", invoice: "Invoices", andon: "ANDON", audit: "Audit" };
+const TAB_TITLES = { universe: "Universe", invoice: "Invoices", andon: "ANDON", audit: "Audit" };
 function pageTitle() {
   const name = { login: "Log in", busy: "Logging in", settings: "Settings", queue: "Queue" }[S.view] || TAB_TITLES[S.tab];
   return `${name} · ${APP.name}`;
@@ -337,7 +342,7 @@ function renderLogin() {
 
 async function login(returnTo) {
   try {
-    await auth.startLogin(returnTo || S.returnTo || "#/briefs");
+    await auth.startLogin(returnTo || S.returnTo || "#/universe");
   } catch (e) {
     S.loginNote = e.message;
     if (S.view === "login") renderLogin(); else toast(e.message, { type: "error" });
@@ -350,7 +355,7 @@ function sessionEnded(message) {
   for (const d of document.querySelectorAll("dialog[open]")) d.close();   // any open sheet: the push sheet or invoice details
   S.data = null; S.lists = null; S.user = null; S.loadError = null;
   S.loginNote = message || "Your login ended after about 2 hours. Log in again to keep going.";
-  S.returnTo = location.hash || "#/briefs";
+  S.returnTo = location.hash || "#/universe";
   if (S.view !== "settings") S.view = "login";
   render();
 }
@@ -421,6 +426,13 @@ function recompute() {
     par: parCards(d.par, d.brief, uni, pending, RULES),
     invoice: collectionCards(d.invoice, uni, coll, pending, RULES),
   };
+  // The Universe tab: the briefs and the PARs waiting for the Universe, as one list,
+  // newest first. (brief and par stay as lists of their own for the queue and links.)
+  const sum = (a, b) => Object.fromEntries([...new Set([...Object.keys(a), ...Object.keys(b)])].map(k => [k, (a[k] || 0) + (b[k] || 0)]));
+  S.lists.universe = {
+    cards: [...S.lists.brief.cards, ...S.lists.par.cards].sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0)),
+    hidden: sum(S.lists.brief.hidden || {}, S.lists.par.hidden || {}),
+  };
   if (d.andon) {
     S.lists.andon = briefCards(d.brief, indexUniverse(d.andon), RULES,
       { allDepartments: true, kind: "andon" });   // the same IGNORE box as the Universe
@@ -441,8 +453,10 @@ function recompute() {
   const andonAudit = d.andon ? auditCards("andon", d.andon, d.brief, RULES,
     { hide: S.auditHide, byCode, options: ctx.optionsOf("andon"), fields: fieldsOf("andon"), ...tagsFor("andon") })
     : { cards: [], tagged: [], hidden: { noBrief: 0, hidden: 0 } };
+  // …and projects whose PM isn't the same in the Universe and ANDON (or is blank in either).
+  const pm = d.andon ? pmCards(d.universe, d.andon, RULES, { fields: { universe: fieldsOf("universe"), andon: fieldsOf("andon") } }) : { cards: [] };
   S.lists.audit = {
-    cards: [...uniAudit.cards, ...andonAudit.cards].sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0)),
+    cards: [...uniAudit.cards, ...andonAudit.cards].sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0)).concat(pm.cards),
     tagged: tagGroups([...uniAudit.tagged, ...andonAudit.tagged], S.customTags.map(x => x.tag)),
     hidden: { hiddenHere: uniAudit.hidden.hidden + andonAudit.hidden.hidden },
   };
@@ -466,6 +480,21 @@ function afterPush(c, res, payload, extra = {}) {
   const d = S.data;
   if (c.kind === "audit") return afterFill(c, res);
   if (c.kind === "edit") return afterEdit(c, res, extra);
+  if (c.kind === "pm") {                // one PM, set in the Universe and ANDON
+    for (const r of res.results) {
+      const rec = (d[r.table] || []).find(x => x.record_id === r.recordId);
+      if (rec) Object.assign(rec.fields, r.written);
+    }
+    recompute();
+    render();
+    const title = `${c.code}'s PM is now ${extra.pmName || "set"} in the Universe and ANDON.`;
+    if (res.readBackError || (res.mismatches && res.mismatches.length)) {
+      const list = res.mismatches && res.mismatches.length
+        ? res.mismatches.map(m => `${m.field}: sent “${m.want}”, Lark has “${m.got}”`).join("; ") : describe(res.readBackError);
+      return { title, dest: "universe", warn: true, detail: `Check these in Lark: ${list}.` };
+    }
+    return { title, dest: "universe", warn: false, detail: "" };
+  }
   if (c.kind === "approval") {          // a PAR's Request No. went into ANDON's Approval
     const rec = (d.andon || []).find(r => r.record_id === res.recordId);
     if (rec) Object.assign(rec.fields, res.written);
@@ -592,7 +621,7 @@ function renderSettings() {
       h("div", { class: "account-text" }, h("b", null, "You're not logged in."),
         h("span", null, "Log in with Lark to see and push changes. A login lasts about 2 hours.")),
       h("div", { class: "account-actions" },
-        h("button", { type: "button", class: "btn btn-sm btn-primary", onclick: () => login("#/briefs") }, "Log in with Lark")));
+        h("button", { type: "button", class: "btn btn-sm btn-primary", onclick: () => login("#/universe") }, "Log in with Lark")));
   }
 
   const proxyState = conn.blocked ? ["is-err", "Blocked by this browser. Allow it in your ad blocker, then reload."]
@@ -822,10 +851,10 @@ setInterval(tickSession, 20000);
     // this runs starts over cleanly instead of replaying a spent code.
     history.replaceState(null, "", location.pathname + location.hash);
     const res = await auth.finishLogin(params);
-    history.replaceState(null, "", location.pathname + (res.returnTo && res.returnTo !== "#/" ? res.returnTo : "#/briefs"));
+    history.replaceState(null, "", location.pathname + (res.returnTo && res.returnTo !== "#/" ? res.returnTo : "#/universe"));
     if (!res.ok) S.loginNote = res.message || describe(res.err);
   } else if (!location.hash) {
-    history.replaceState(null, "", location.pathname + location.search + "#/briefs");
+    history.replaceState(null, "", location.pathname + location.search + "#/universe");
   }
   if (auth.currentToken()) {
     S.user = null;

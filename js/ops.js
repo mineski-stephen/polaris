@@ -57,6 +57,8 @@ export function schemaSpec(rules) {
              "RFP Received Date", "Status", "Year", "Amount (VAT-Inc.)", "Business Unit", rules.universeIgnoreField,
              // …and what the audit compares with the brief
              "MKT", "VAT%", "Project Description", "Project Start", "Project End",
+             // …and the PM, which must match ANDON's PM (LEAD) (the PM audit)
+             rules.pmSync.universe,
              // …and the rest a push writes, so the push sheet can show the whole row
              "Mancom Phase", "Other Links",
              // …and what the team notes on a project, shown in the push sheet's row (read only)
@@ -94,12 +96,13 @@ export function schemaSpec(rules) {
     },
     collections: {
       read: ["Project Code", "Invoice Request", "AR Name", "Invoice Amount", "Currency", "Sales Remarks", "Status",
-             "AM", "Invoice Number", "SI Number", "Invoice", "Invoice Date"],
+             "AM", "Invoice Number", "SI Number", "Invoice", "Invoice Date", "Collection Date"],
       index: ["Project Code", "Invoice Request", "AR Name", "Invoice Amount", "Currency", "Status"],
       fields: {
         "AR Name": T.text, "Project Code": T.text, "Invoice Amount": T.number,
         "Currency": T.select, "Status": T.select, "Business Unit": T.select, "Invoice Request": T.number,
         "Sales Remarks": T.text, "Invoice Number": T.text, "SI Number": T.text, "Invoice": T.file, "Invoice Date": T.date,
+        "Collection Date": T.date,   // asked for when an approved request moves its row to For Collection
       },
       options: {
         "Status": [...Object.values(rules.collectionStages), ...rules.invalidStatuses],
@@ -488,6 +491,36 @@ export async function saveEdit(call, t, recordId, write, loaded, defs) {
     readBackError = e;
   }
   return { recordId, written: write, record, mismatches, readBackError };
+}
+
+/* One PM for a project in the Universe and ANDON (the PM audit): `rows` =
+   [{ table, rowId, loaded (its fields as the card saw them) }], `writes` = { table:
+   { column: [{id}] } }. Every row is re-read FIRST: if any of the PM cells changed in
+   Lark since the card was made, nothing is written anywhere (no half-done project).
+   Rows that already have that PM are left alone; if all do, AlreadyDone. Then each
+   remaining row is written and read back.
+   Resolves { recordId (the first row), written (the first row's write), results:
+   [{ table, recordId, written, mismatches, readBackError }], mismatches, readBackError }. */
+export async function syncPm(call, tables, rows, writes, defsOf) {
+  const todo = [];
+  for (const r of rows) {
+    const now = await findRecord(call, tables[r.table], r.rowId);
+    if (!now) throw Object.assign(new Error("gone"), { userMessage: `A ${TABLE_TITLES[r.table]} row of this project isn't in Lark any more. Refresh, then try again.` });
+    const { stale, done } = editCheck(writes[r.table], defsOf(r.table), r.loaded, now.fields);
+    if (stale.length) throw new EditConflict(stale.map(k => `${TABLE_TITLES[r.table]}'s ${k}`));
+    if (!done) todo.push(r);
+  }
+  if (!todo.length) throw new AlreadyDone("Both already have that PM.");
+  const results = [];
+  for (const r of todo) {
+    const t = tables[r.table], written = writes[r.table];
+    await updateRecord(call, t, r.rowId, written);
+    results.push({ table: r.table, recordId: r.rowId, written, ...await readBack(call, t, r.rowId, written) });
+  }
+  const first = results[0];
+  return { recordId: first.recordId, written: first.written, results,
+           mismatches: results.flatMap(x => (x.mismatches || []).map(m => ({ ...m, field: `${TABLE_TITLES[x.table]}'s ${m.field}` }))),
+           readBackError: (results.find(x => x.readBackError) || {}).readBackError || null };
 }
 
 /* Mark a row with a custom tag (add = true) or take it off. The Tags cell is plain

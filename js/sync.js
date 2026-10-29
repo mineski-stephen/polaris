@@ -1703,3 +1703,52 @@ export function attachmentLink(json, fileToken) {
   const link = hit && typeof hit.tmp_download_url === "string" ? hit.tmp_download_url : "";
   return /^https:\/\//.test(link) ? link : "";
 }
+
+/* ======================= PM: the same in the Universe and ANDON ======================= */
+/* A project in both the Universe and ANDON whose Universe PM (rules.pmSync.universe)
+   and ANDON PM (LEAD) (rules.pmSync.andon, in every ANDON row with its code) differ,
+   or where either is blank, gets an Audit card. The card suggests ANDON's PM (it's
+   Project Management's board), else the Universe's. A table without its PM column
+   (in `fields`) gives no cards. `loaded` keeps each PM cell as the card saw it, so
+   the push can tell if it changed in Lark meanwhile. */
+export function pmCards(universe, andon, rules, { fields = {} } = {}) {
+  const cfg = rules.pmSync;
+  if (!cfg) return { cards: [] };
+  const has = (table, col) => !fields[table] || fields[table].some(f => f.field_name === col);
+  if (!has("universe", cfg.universe) || !has("andon", cfg.andon)) return { cards: [] };
+  const byCode = new Map();
+  for (const r of andon || []) {
+    const code = normCode(plain((r.fields || {})["Project Code"]));
+    if (code) byCode.set(code, [...(byCode.get(code) || []), r]);
+  }
+  const key = (list) => list.map(u => u.id).sort().join(",");
+  const cards = [];
+  for (const row of universe || []) {
+    const f = row.fields || {};
+    const code = normCode(plain(f["Project Code"]));
+    const rows = code && byCode.get(code);
+    if (!rows) continue;
+    const uPm = people(f[cfg.universe]);
+    const aPms = rows.map(r => people((r.fields || {})[cfg.andon]));
+    const blank = !uPm.length || aPms.some(p => !p.length);
+    const differ = aPms.some(p => key(p) !== key(uPm));
+    if (!blank && !differ) continue;
+    const suggestion = (aPms.find(p => p.length) || uPm).slice(0, 1);
+    cards.push({
+      kind: "pm", id: `pm:${row.record_id}`, rowId: row.record_id, code,
+      name: clean(f["Project"]) || clean((rows[0].fields || {})["Project"]), status: clean(f["Status"]),
+      universePm: uPm, andonPm: aPms, andonRows: rows.map(r => r.record_id), blank, suggestion,
+      loaded: { universe: { [cfg.universe]: f[cfg.universe] },
+                andon: Object.fromEntries(rows.map(r => [r.record_id, { [cfg.andon]: (r.fields || {})[cfg.andon] }])) },
+      submittedAt: null, notes: [], blocked: "",
+    });
+  }
+  cards.sort((a, b) => b.code.localeCompare(a.code, "en", { numeric: true }));
+  return { cards };
+}
+
+/* The cells a PM Fill writes: the chosen person (one) in both tables. */
+export function pmWrites(person, rules) {
+  const v = person && person.id ? [{ id: person.id }] : null;
+  return { universe: { [rules.pmSync.universe]: v }, andon: { [rules.pmSync.andon]: v } };
+}

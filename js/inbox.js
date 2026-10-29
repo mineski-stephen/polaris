@@ -3,10 +3,10 @@
 
 import { RULES, LARK } from "./config.js";
 import { TABLE_TITLES, pushBrief, pushPar, pushCollections, pushAndon, setIgnore, newClientToken, writableOnly, fillGaps,
-         saveEdit, findRecord, setTag } from "./ops.js";
+         saveEdit, findRecord, setTag, syncPm } from "./ops.js";
 import {
   universeFromBrief, collectionsChange, stepStatus, parAfterAdding, defaultVat, vatMentions,
-  people, plain, andonFromBrief, auditPatch, auditMissing, auditFilesMissing, monthOf, clean, editChanges, editWrite,
+  people, plain, pmWrites, andonFromBrief, auditPatch, auditMissing, auditFilesMissing, monthOf, clean, editChanges, editWrite,
   tagsWith, tagsWithout, requiredMessage, FILTER_KEYS, NONE, passesFilters, filterChoices, closestMatches,
 } from "./sync.js";
 import { uploadSizeProblem } from "./errors.js";
@@ -15,9 +15,9 @@ import { copyableText, dateField } from "./polaris-ui.js";
 import { createRowDoc } from "./rowdoc.js";
 import { describe, isDeadToken, isUncertain, uploadToBase } from "./net.js";
 
-const NOUN = { brief: "briefs", par: "PARs", invoice: "invoices", andon: "briefs for ANDON", audit: "projects with blanks" };
+const NOUN = { universe: "briefs or PARs", brief: "briefs", par: "PARs", invoice: "invoices", andon: "briefs for ANDON", audit: "projects with blanks" };
 // The search box says what it looks through on each tab.
-const SEARCHES = { brief: "Search code, project, AM…", par: "Search request no., code, project…",
+const SEARCHES = { universe: "Search code, project, AM, request no.…", brief: "Search code, project, AM…", par: "Search request no., code, project…",
                    invoice: "Search request no., code, project…", andon: "Search code, project, AM…",
                    audit: "Search project, code, blank columns…" };
 const STAGE_ORDER = ["universe", "brief", "par", "invoice", "collections", "andon"];
@@ -164,10 +164,12 @@ export function createInbox(ctx) {
     if (S.loadError && !S.loading && !S.quiet) {
       content = ["callout callout-err", [ic("alert"), h("div", null, describe(S.loadError)),
         h("button", { type: "button", class: "btn btn-sm", onclick: () => ctx.loadData() }, "Try again")]];
-    } else if (ctx.problemsFor(S.tab).length) {
+    } else if (tabProblems().length) {
+      // Every kind of card on this tab counts (the Audit tab's Universe, ANDON and PM
+      // cards each need their own columns), so a switched-off button always has its reason here.
       content = ["callout callout-err", [ic("alert"), h("div", null,
-        "These columns don't match what Polaris expects, so pushing is off here until they're fixed:",
-        h("ul", null, ctx.problemsFor(S.tab).map(p => h("li", null, p))))]];
+        "These columns don't match what Polaris expects, so the cards that need them can't be pushed until they're fixed:",
+        h("ul", null, tabProblems().map(p => h("li", null, p))))]];
     } else if (S.data && !ctx.canWriteFor(S.tab)) {
       content = ["callout callout-warn", [ic("alert"),
         h("div", null, "Your login can only read the tables. Log in again to allow pushing."),
@@ -175,6 +177,26 @@ export function createInbox(ctx) {
     }
     box.hidden = !content;
     if (content) { box.className = content[0]; box.replaceChildren(...content[1]); }
+  }
+
+  // The kinds of push each tab's cards make (TABLES_FOR / neededBy in app.js and ops.js).
+  const TAB_KINDS = { universe: ["brief", "par"], invoice: ["invoice"], andon: ["andon", "approval"],
+                      audit: ["audit:universe", "audit:andon", "pm"] };
+  const tabProblems = () => [...new Set([S.tab, ...(TAB_KINDS[S.tab] || [])].flatMap(k => ctx.problemsFor(k)))];
+
+  /* Why a kind of push is off, in one sentence ("" when it's on). */
+  function offReason(kind) {
+    const p = ctx.problemsFor(kind);
+    if (p.length) return `Off until ${p.length === 1 ? "this is" : "these are"} fixed: ${p.join(" ")}`;
+    if (S.data && !ctx.canWriteFor(kind)) return "Your login can only read the tables. Log in again to allow pushing.";
+    return "";
+  }
+  /* A card's main button. When it's off, the wrapper says why on hover (a disabled
+     button shows no tooltip of its own), like Ignore's. */
+  function mainButton(label, kind, onclick) {
+    const why = offReason(kind);
+    const btn = h("button", { type: "button", class: "btn btn-tonal", disabled: !!why, onclick }, label);
+    return why ? h("span", { class: "btn-wrap", title: why }, btn) : btn;
   }
 
   /* Honest, staged progress: the real tables, ticked off as they arrive. */
@@ -225,7 +247,8 @@ export function createInbox(ctx) {
     empty.hidden = cards.length > 0;
     empty.textContent = found.length && !cards.length ? `No ${NOUN[S.tab]} match the filters.`
       : q ? `No ${NOUN[S.tab]} match "${q.trim()}".`
-      : { brief: "Every brief is in the Universe. Nice work!",
+      : { universe: "Every brief and PAR is in the Universe. Nice work!",
+          brief: "Every brief is in the Universe. Nice work!",
           par: "Every PAR is in the Universe. Nice work!",
           invoice: "Collections is up to date. Nice work!",
           andon: "Every brief is in ANDON. Nice work!",
@@ -255,6 +278,7 @@ export function createInbox(ctx) {
   function cardEl(c) {
     if (c.kind === "audit") return auditCardEl(c);
     if (c.kind === "approval") return approvalCardEl(c);
+    if (c.kind === "pm") return pmCardEl(c);
     const writable = ctx.canWriteFor(c.kind);
     const notes = [];
     let meta;
@@ -310,10 +334,26 @@ export function createInbox(ctx) {
         h("button", { type: "button", class: "btn btn-tonal", disabled: !pushable, onclick: () => openSheet(c) }, "Push")));
   }
 
+  /* A project whose PM isn't the same in the Universe and ANDON (or is blank in one). */
+  function pmCardEl(c) {
+    const who = (list) => (list.length ? list.map(u => u.name || u.id).join(", ") : "blank");
+    const andon = [...new Set(c.andonPm.map(who))].join(" / ");
+    return h("article", { class: "card item" + (S.working.has(c.id) ? " is-working" : "") + (S.entering.has(c.id) ? " is-entering" : ""),
+                          "data-id": c.id },
+      h("div", { class: "item-head" },
+        copyable(c.code, { label: "project code", cls: "code" }),
+        h("span", { class: "badge badge-info" }, "PM"),
+        c.status ? h("span", { class: "item-date" }, c.status) : null),
+      h("h3", null, c.name || "(no name)"),
+      h("ul", { class: "notes" }, h("li", { class: "flow" },
+        h("span", { class: "flow-step" }, h("b", null, "Universe"), ` ${who(c.universePm)}`),
+        h("span", { class: "flow-step" }, h("b", null, "ANDON"), ` ${andon}`))),
+      h("div", { class: "item-actions" }, mainButton("Fill", "pm", () => openSheet(c))));
+  }
+
   /* An ANDON row whose project has a Project Approval: its Request No. goes into
      ANDON's Approval (a link to the approval, shown as the number). */
   function approvalCardEl(c) {
-    const writable = ctx.canWriteFor("approval");
     return h("article", { class: "card item" + (S.working.has(c.id) ? " is-working" : "") + (S.entering.has(c.id) ? " is-entering" : ""),
                           "data-id": c.id },
       h("div", { class: "item-head" },
@@ -322,8 +362,7 @@ export function createInbox(ctx) {
         h("span", { class: "item-date" }, c.submittedAt ? `PAR ${fmt.day(c.submittedAt)}` : "")),
       h("h3", null, c.name || "(no name)"),
       h("p", { class: "item-meta" }, "PAR ", copyable(c.requestNo, { label: "request number" }), ` · into ANDON's ${c.field}`),
-      h("div", { class: "item-actions" },
-        h("button", { type: "button", class: "btn btn-tonal", disabled: !writable, onclick: () => openSheet(c) }, "Push")));
+      h("div", { class: "item-actions" }, mainButton("Push", "approval", () => openSheet(c))));
   }
 
   /* Where a Collections card lands: the row (“AR name”), then From → To. */
@@ -337,15 +376,23 @@ export function createInbox(ctx) {
     return [name, h("span", { class: "flow-step" }, t.row.status || "No status", arrow, h("b", null, to))];
   }
 
+  /* Show a card in the Universe tab and let it glow. Briefs and PARs share that tab,
+     so the link is often to the tab already open: then draw it here (no hash change). */
+  function goTo(e, id) {
+    S.flashCard = id;
+    S.query.universe = "";
+    if (location.hash === "#/universe") { e.preventDefault(); ctx.render(); }
+  }
+
   /* A link to the card that clears a blocker, if it's in the lists. */
   function fixLink(reason, code) {
     if (reason.startsWith("Push this project's brief")) {
       const brief = S.lists.brief.cards.find(b => b.code === code);
-      return brief ? h("a", { href: "#/briefs", onclick: () => { S.flashCard = brief.id; S.query.brief = ""; } }, "Go to the brief") : null;
+      return brief ? h("a", { href: "#/universe", onclick: (e) => goTo(e, brief.id) }, "Go to the brief") : null;
     }
     if (reason.startsWith("Add this project's PAR")) {
       const par = S.lists.par.cards.find(p => p.code === code);
-      return par ? h("a", { href: "#/pars", onclick: () => { S.flashCard = par.id; S.query.par = ""; } }, "Go to the PAR") : null;
+      return par ? h("a", { href: "#/universe", onclick: (e) => goTo(e, par.id) }, "Go to the PAR") : null;
     }
     return null;
   }
@@ -445,7 +492,6 @@ export function createInbox(ctx) {
   const AUDIT_DATES = new Set(["Project Start", "Project End", "RFP Received Date", "Event Start", "Event End"]);
 
   function auditCardEl(c) {
-    const writable = ctx.canWriteFor(`audit:${c.target}`);
     return h("article", { class: "card item" + (S.working.has(c.id) ? " is-working" : "") + (S.entering.has(c.id) ? " is-entering" : ""),
                           "data-id": c.id },
       h("div", { class: "item-head" },
@@ -473,7 +519,7 @@ export function createInbox(ctx) {
           : h("button", { type: "button", class: "btn btn-ghost hide-btn", "aria-haspopup": "menu", "aria-expanded": "false",
               title: "Mark it with a tag (for everyone), or hide it on this device",
               onclick: (e) => hideMenu(c, e.currentTarget) }, "Hide", ic("caret")),
-        h("button", { type: "button", class: "btn btn-tonal", disabled: !writable, onclick: () => openSheet(c) }, "Fill")));
+        mainButton("Fill", `audit:${c.target}`, () => openSheet(c))));
   }
 
   /* Under Hide: "Mark as …" for each custom tag (Settings > Custom tags), written to
@@ -903,9 +949,11 @@ export function createInbox(ctx) {
   function defaults(c) {
     if (c.kind === "brief") return { vat: defaultVat(c.currency), client: "", bd: [], otherLinks: "", showLinks: false };
     if (c.kind === "invoice") {
-      return { targetId: c.target, arName: c.name, invoiceNo: "", siNo: "", invoiceDate: null, invoiceDateOk: true, files: [], showDetails: false };
+      return { targetId: c.target, arName: c.name, invoiceNo: "", siNo: "", invoiceDate: null, invoiceDateOk: true,
+               collectionDate: null, collectionDateOk: true, files: [], showDetails: false };
     }
     if (c.kind === "andon") return { pm: [], tribe: "" };
+    if (c.kind === "pm") return { pm: c.suggestion.map(u => ({ id: u.id, name: u.name || u.id, email: "" })) };
     if (c.kind === "edit") return { edits: {}, files: [], bad: [], loaded: null };
     if (c.kind === "audit") return { fields: [...c.gaps], vat: defaultVat(c.brief ? c.brief.currency : "PHP"), values: null, edited: [], bad: [], files: [] };
     return {};
@@ -928,11 +976,11 @@ export function createInbox(ctx) {
     $("#sheetTitle").textContent = { brief: "Push to Universe", par: "Add PAR to Universe", invoice: "Add to Collections", andon: "Add to ANDON",
                                      audit: `Fill blanks in ${c.target === "andon" ? "ANDON" : "the Universe"}`,
                                      edit: `Changes to this ${EDIT_WHERE[c.table]} row`, view: TABLE_TITLES[c.table],
-                                     approval: "Add approval to ANDON" }[c.kind];
+                                     approval: "Add approval to ANDON", pm: "Set the PM in the Universe and ANDON" }[c.kind];
     $("#sheetSub").replaceChildren(copyable(c.code, { label: "project code", empty: "No code" }),
       ...((c.kind === "par" || c.kind === "invoice" || c.kind === "view" || c.kind === "approval") && c.requestNo ? [" · request ", copyable(c.requestNo, { label: "request number" })] : []), ` · ${c.name}`);
     go.querySelector(".label").textContent = { brief: "Push to Universe", par: "Add PAR", invoice: "Add to Collections", andon: "Add to ANDON", audit: "Fill",
-                                               edit: "Push changes", approval: "Add approval" }[c.kind];
+                                               edit: "Push changes", approval: "Add approval", pm: "Set PM" }[c.kind];
     $("#sheetError").hidden = true;
     const body = $("#sheetBody");
     body.replaceChildren();
@@ -946,6 +994,7 @@ export function createInbox(ctx) {
     else if (c.kind === "andon") buildAndon(body, c);
     else if (c.kind === "audit") buildAudit(body, c);
     else if (c.kind === "approval") buildApproval(body, c);
+    else if (c.kind === "pm") buildPm(body, c);
     else buildInvoice(body, c);
     placeDoc();
     if (c.kind !== "view") paintDoc();
@@ -1034,6 +1083,21 @@ export function createInbox(ctx) {
   }
 
   /* --- PAR --- */
+  /* --- PM: one person for the Universe's PM and ANDON's PM (LEAD). Fill stays off while it's blank. --- */
+  function buildPm(body, c) {
+    const ch = sheet.choices;
+    const refresh = () => {
+      sheet.blocked = (ch.pm || []).length ? "" : "PM";
+      go.disabled = sheet.busy || !!sheet.blocked;
+      paintDoc();
+    };
+    sheet.refresh = refresh;
+    const pool = [...new Map([...(S.pmPool || []), ...S.pool, ...c.universePm, ...c.andonPm.flat()].map(p => [p.id, p])).values()];
+    put(body, fieldEl("PM", false, peoplePicker({ id: "sheetPmSync", selected: ch.pm || [], pool, placeholder: "Pick the PM",
+      single: true, head: "Frequent PMs", onChange: (list) => { ch.pm = list; refresh(); } }), "sheetPmSync"));
+    refresh();
+  }
+
   /* --- PAR → ANDON Approval: nothing to choose; the row beside it shows the change. --- */
   function buildApproval(body, c) {
     sheet.refresh = paintDoc;
@@ -1072,6 +1136,12 @@ export function createInbox(ctx) {
     const arField = h("div", { class: "field" });
     const blockNote = h("p", { class: "note", role: "status" });
     const details = h("div", { class: "field" });
+    // An approved request (its row goes to For Collection) needs the Collection Date.
+    const needsDate = () => c.step === "approved" && !ch.invalid;
+    const collField = h("div", { class: "field" });
+    collField.append(h("label", { class: "field-label", for: "sheetCollDate" }, "Collection Date"),
+      dateField({ id: "sheetCollDate", value: ch.collectionDate || null,
+                  onChange: (ms, ok) => { ch.collectionDate = ms; ch.collectionDateOk = ok; refresh(); } }));
     const refresh = () => {
       const change = collectionsChange(c, ch, opts, RULES);
       const [title, label] = verbs(c, change.action, ch.invalid);
@@ -1079,10 +1149,14 @@ export function createInbox(ctx) {
       if (!sheet.busy) go.querySelector(".label").textContent = label;
       arField.hidden = change.mode !== "create";
       details.hidden = c.step !== "approved";
-      sheet.blocked = (change.mode === "create" && !ch.invalid ? c.noNew : "")
-        || (ch.invoiceDateOk === false ? "Invoice Date isn't a date Polaris can read. Try Oct 14, 2026, or double-click it to pick one." : "");
-      blockNote.hidden = !sheet.blocked;
-      blockNote.textContent = sheet.blocked;
+      collField.hidden = !needsDate();
+      const said = (change.mode === "create" && !ch.invalid ? c.noNew : "")
+        || (ch.invoiceDateOk === false ? "Invoice Date isn't a date Polaris can read. Try Oct 14, 2026, or double-click it to pick one." : "")
+        || (needsDate() && ch.collectionDateOk === false ? "Collection Date isn't a date Polaris can read. Try Oct 14, 2026, or double-click it to pick one." : "");
+      // A blank Collection Date just keeps the button off (the empty field says what's missing).
+      sheet.blocked = said || (needsDate() && !ch.collectionDate ? "Collection Date" : "");
+      blockNote.hidden = !said;
+      blockNote.textContent = said;
       go.disabled = sheet.busy || !!sheet.blocked;
       paintDoc();
     };
@@ -1143,7 +1217,7 @@ export function createInbox(ctx) {
 
     put(body, picker, arField, blockNote,
                 c.notes.length ? h("p", { class: "note" }, copyableText(`Note: ${c.notes.join(" ")}`)) : null,
-                details);
+                collField, details);
     refresh();
   }
 
@@ -1155,6 +1229,7 @@ export function createInbox(ctx) {
     if (ch.invoiceNo.trim()) out["Invoice Number"] = ch.invoiceNo.trim();
     if (ch.siNo.trim()) out["SI Number"] = ch.siNo.trim();
     if (ch.invoiceDate) out["Invoice Date"] = ch.invoiceDate;   // already midnight Manila
+    if (ch.collectionDate) out["Collection Date"] = ch.collectionDate;
     await uploadFiles(ch.files, ctx.tables.collections, onStatus);
     if (ch.files.length) out["Invoice"] = ch.files.map(f => ({ file_token: f.file_token }));
     onStatus("Pushing…");
@@ -1214,6 +1289,12 @@ export function createInbox(ctx) {
     if (c.kind === "approval") {
       return { ...base, verb: `Add PAR ${c.requestNo} to ANDON`, table: "andon", rowId: c.rowId, fields: { [c.field]: c.link } };
     }
+    if (c.kind === "pm") {   // the Universe row beside the sheet (ANDON gets the same)
+      const p = (ch.pm || [])[0];
+      if (p) names[p.id] = p.name;
+      return { ...base, verb: "Set the PM in the Universe and ANDON", table: "universe", rowId: c.rowId,
+               fields: p ? pmWrites(p, RULES).universe : {} };
+    }
     if (c.kind === "edit") {
       const fields = editChanges(ctx.fieldsOf(c.table), ch.loaded || {}, ch);
       const n = Object.keys(fields).length;
@@ -1242,6 +1323,7 @@ export function createInbox(ctx) {
       if (ch.invoiceNo && ch.invoiceNo.trim()) fields["Invoice Number"] = ch.invoiceNo.trim();
       if (ch.siNo && ch.siNo.trim()) fields["SI Number"] = ch.siNo.trim();
       if (ch.invoiceDate) fields["Invoice Date"] = ch.invoiceDate;
+      if (ch.collectionDate) fields["Collection Date"] = ch.collectionDate;
       if (ch.files && ch.files.length) fields["Invoice"] = ch.files.map(f => ({ name: f.name }));
     }
     return { ...base, verb: verbs(c, change.action, job.invalid)[0], table: "collections",
@@ -1253,6 +1335,17 @@ export function createInbox(ctx) {
   async function perform(c, job, { onStatus = () => {} } = {}) {
     let res, payload, extra = {};
     const ch = job.choices;
+    if (c.kind === "pm") {
+      // Refused here too: one PM, never blank. Both tables are re-read before either is written.
+      const p = (ch.pm || [])[0];
+      if (!p) throw Object.assign(new Error("required"), { userMessage: "Pick the PM first." });
+      const writes = pmWrites(p, RULES);
+      const rows = [{ table: "universe", rowId: c.rowId, loaded: c.loaded.universe },
+                    ...c.andonRows.map(id => ({ table: "andon", rowId: id, loaded: c.loaded.andon[id] }))];
+      payload = writes.universe;
+      res = await syncPm(ctx.call, ctx.tables, rows, writes, (t) => ctx.fieldsOf(t));
+      return { res, payload, extra: { pmName: p.name } };
+    }
     if (c.kind === "approval") {
       // Only into a blank Approval: one someone filled meanwhile is left alone (AlreadyDone).
       payload = { [c.field]: c.link };
@@ -1302,6 +1395,10 @@ export function createInbox(ctx) {
       res = await fillGaps(ctx.call, ctx.tables[c.target], c.rowId, payload, "Status" in payload ? { Status: c.status } : {});
     } else {
       const change = collectionsChange(c, { ...ch, invalid: job.invalid }, ctx.collectionOptions(), RULES);
+      // Refused here too, not only in the sheet: an approved request needs its Collection Date.
+      if (c.step === "approved" && !job.invalid && !ch.collectionDate) {
+        throw Object.assign(new Error("required"), { userMessage: "An approved invoice needs its Collection Date." });
+      }
       if (c.step === "approved") Object.assign(change.fields, await invoiceDetails(ch, onStatus));
       payload = change.fields;
       const t = c.targets.find(x => x.id === change.rowId);

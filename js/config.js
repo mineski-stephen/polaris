@@ -9,7 +9,7 @@
 
 /* version: bump it with every release and add an entry to CHANGELOG.md (newest first, same number).
    The top bar shows it beside the name, so people can see at a glance which version they're running. */
-export const APP = { name: "Polaris", key: "polaris", version: "1.8.0", env: "live" };   // env: "live" | "test"
+export const APP = { name: "Polaris", key: "polaris", version: "1.9.1", env: "live" };   // env: "live" | "test"
 export const ENV_LABEL = APP.env === "test" ? "Test copy" : "";         // shown in the header, never a gate
 
 /* The connection service: the shared Lark proxy (Render). `service` is the name its
@@ -122,6 +122,10 @@ export const RULES = {
   // PAR's Request No. (its number, linking to the approval) in `field`, a link
   // column, while it's blank: one card per row, pushed like a PAR to the Universe.
   andonApproval: { field: "Approval" },
+  // The audit: a project's PM must be the same in the Universe (`universe`) and in
+  // its ANDON row(s) (`andon`). If they differ or either is blank, it gets an Audit
+  // card whose Fill sets one PM in both; the Fill is refused while it's blank.
+  pmSync: { universe: "PM", andon: "PM (LEAD)" },
   // Custom tags: "Mark as No Revenue", "Mark as Hidden"… under an audit card's Hide.
   // The tags are the rows of the Variables table whose `nameColumn` is `variable`
   // (one row per tag, the tag in `valueColumn`); Settings adds and removes them.

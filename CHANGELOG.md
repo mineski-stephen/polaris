@@ -9,6 +9,29 @@ or links stop working), add an entry here with the same number and the date,
 and say what changed in the team's words. `npm run check:shell` fails if the
 two numbers differ.
 
+## 1.9.1 · Oct 29, 2026
+
+- **Fixed:** when a column the Audit needs is missing (for example the Universe's
+  **Loss Month**), the Audit tab now says which, and hovering a greyed-out **Fill**
+  shows why. Before, the buttons were just off. The same goes for the ANDON tab's
+  approval cards.
+
+## 1.9.0 · Oct 29, 2026
+
+- **Briefs and PARs are one tab: Universe.** Everything waiting to go into the
+  Universe is in one list, newest first; a PAR's card says *PAR …*. Each still pushes
+  the way it did. Old links to the Briefs or PARs tab open the Universe tab, and
+  **Go to the brief** / **Go to the PAR** highlight the card in the same list.
+- **Collection Date for approved invoices.** On the **Invoices** tab, an approved
+  request (its Collections row moves to *For Collection*) now asks for the
+  **Collection Date**, and won't push until it's filled. It's written to the row's
+  Collection Date column.
+- **New audit: the PM must match.** A project whose **PM** in the Universe and **PM
+  (LEAD)** in ANDON aren't the same, or is blank in either, gets an Audit card (it shows
+  both). **Fill** picks one PM (ANDON's is filled in, else the Universe's) and sets it
+  in both, every ANDON row of the project included. It won't push while the PM is
+  blank. If someone changed either PM in Lark meanwhile, nothing is written anywhere.
+
 ## 1.8.0 · Oct 26, 2026
 
 - **The ANDON approval moved to the ANDON tab, and follows the Project Approval.**

@@ -9,7 +9,7 @@ import {
   indexUniverse, indexCollections, briefCards, parCards, collectionCards, collectionsChange,
   universeFromBrief, verifyWritten, similarity, vatMentions,
   peoplePool, universeView, shortName, andonFromBrief, collectionsView, collectionRow, invoiceDetailsPatch,
-  auditCards, auditPatch, parseDay, fillPlan, invoiceChangedSince, draftsToJSON, draftsFromJSON, queueToJSON, queueFromJSON, cellText, parApprovals, approvalCards, attachmentRequest, attachmentLinkRequest, attachmentLink, isWonProject, auditMissing, monthOf,
+  auditCards, auditPatch, parseDay, fillPlan, invoiceChangedSince, draftsToJSON, draftsFromJSON, queueToJSON, queueFromJSON, cellText, parApprovals, approvalCards, pmCards, attachmentRequest, attachmentLinkRequest, attachmentLink, isWonProject, auditMissing, monthOf,
   needsSignedCe, auditFilesMissing, isBlank,
   matchesQuery, andonView, canEditField, editChanges, editWrite, editCheck, editKey, writeValueOf,
   tagsOf, tagsWith, tagsWithout, variableColumns, customTagsFrom, customTagOf, tagGroups,
@@ -1194,4 +1194,33 @@ test("attachments: download addresses carry the Base's permission context", () =
   assert.equal(attachmentLink(json, "boxA"), "https://dl.example/boxA");
   assert.equal(attachmentLink({ data: { tmp_download_urls: [{ file_token: "boxA", tmp_download_url: "javascript:alert(1)" }] } }, "boxA"), "");
   assert.equal(attachmentLink(null, "boxA"), "");
+});
+
+test("PM audit: a project whose PM differs between the Universe and ANDON, or is blank in either, gets a card", () => {
+  const p = (id, name) => [{ id, name }];
+  const uni = [
+    rec("u1", { "Project Code": seg("2026TEG-P0900"), "Project": seg("Same"), "PM": p("ou_a", "Ana") }),
+    rec("u2", { "Project Code": seg("2026TEG-P0901"), "Project": seg("Differs"), "PM": p("ou_a", "Ana") }),
+    rec("u3", { "Project Code": seg("2026TEG-P0902"), "Project": seg("Universe blank") }),
+    rec("u4", { "Project Code": seg("2026TEG-P0903"), "Project": seg("ANDON blank"), "PM": p("ou_a", "Ana") }),
+    rec("u5", { "Project Code": seg("2026TEG-P0904"), "Project": seg("Not in ANDON") }),
+    rec("u6", { "Project Code": seg("2026TEG-P0905"), "Project": seg("One of two ANDON rows differs"), "PM": p("ou_a", "Ana") }),
+  ];
+  const andon = [
+    rec("a1", { "Project Code": seg("2026TEG-P0900"), "PM (LEAD)": p("ou_a", "Ana") }),
+    rec("a2", { "Project Code": seg("2026TEG-P0901"), "PM (LEAD)": p("ou_b", "Ben") }),
+    rec("a3", { "Project Code": seg("2026TEG-P0902"), "PM (LEAD)": p("ou_b", "Ben") }),
+    rec("a4", { "Project Code": seg("2026TEG-P0903") }),
+    rec("a5", { "Project Code": seg("2026TEG-P0905"), "PM (LEAD)": p("ou_a", "Ana") }),
+    rec("a6", { "Project Code": seg("2026TEG-P0905"), "PM (LEAD)": p("ou_c", "Cara") }),
+  ];
+  const { cards } = pmCards(uni, andon, RULES);
+  const by = Object.fromEntries(cards.map(c => [c.rowId, c]));
+  assert.deepEqual(Object.keys(by).sort(), ["u2", "u3", "u4", "u6"]);       // same PM, or not in ANDON: no card
+  assert.deepEqual(by.u2.suggestion.map(u => u.id), ["ou_b"]);              // ANDON's PM is suggested
+  assert.deepEqual(by.u4.suggestion.map(u => u.id), ["ou_a"]);              // ANDON blank: the Universe's
+  assert.deepEqual(by.u6.andonRows, ["a5", "a6"]);                           // every ANDON row gets the PM
+  assert.deepEqual(by.u2.loaded.andon.a2, { "PM (LEAD)": p("ou_b", "Ben") });
+  // a table without its PM column: no cards
+  assert.equal(pmCards(uni, andon, RULES, { fields: { universe: [{ field_name: "Project" }] } }).cards.length, 0);
 });

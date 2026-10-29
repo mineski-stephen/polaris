@@ -56,7 +56,8 @@ phone and on a PC, and every change is made as you, with your own Lark login.
    long you have left (it turns amber in the last 10 minutes), a message stays on screen
    in the last 5, and Settings shows the exact time it ends. **Log in again** there to
    get a fresh 2 hours. A push that's already running isn't cut off by the clock.
-2. **Briefs / PARs** tabs list what isn't in the Universe yet; **Invoices** lists
+2. The **Universe** tab lists the briefs and PARs that aren't in the Universe yet, in one
+   list (a PAR card says *PAR …*; old `#/briefs` and `#/pars` links open it); **Invoices** lists
    every change Collections needs (see [Invoices](#invoices-the-collections-lifecycle)).
    Newest first; search narrows the list.
 
@@ -88,7 +89,9 @@ phone and on a PC, and every change is made as you, with your own Lark login.
    - *PAR:* if several Universe rows share the code, you choose the row.
    - *Invoice:* pick another Collections row (or a new one) if Polaris guessed wrong;
      a new row's **AR Name** can be edited (for example add "Downpayment"). For an
-     approved request you can add the invoice details (number, SI, date, file).
+     approved request (its row goes to *For Collection*) the **Collection Date** is needed:
+     the push stays off until it's filled. You can also add the invoice details (number,
+     SI, date, file).
    - *Audit (Fill):* each blank the brief can fill, ticked and pre-filled; edit or untick.
      A blank **Signed CE (PDF)** asks for the file(s), which upload when the push runs.
    The sheet's button (**Push to Universe**, **Fill 2 fields**, …) closes it at once:
@@ -336,6 +339,14 @@ the Fill (the row beside the sheet shows the change, and the queue says *Fill 2 
 and set Status to Stalled*). Status isn't a blank, so it's only changed if the row in
 Lark still says what the card showed: if someone changed it meanwhile, theirs is kept
 and the result says so.
+
+**The PM must be the same in the Universe and ANDON.** A project in both whose
+Universe **PM** and ANDON **PM (LEAD)** differ (in any of its ANDON rows), or where
+either is blank, gets an Audit card showing both. **Fill** asks for one PM, filled in
+with ANDON's (else the Universe's), and sets it in the Universe and in every ANDON row
+of the project; it stays off while the PM is blank. Before writing, both tables are
+re-read: if either PM was changed in Lark meanwhile, nothing is written anywhere and the
+queue says which. The columns are `pmSync` in [`js/config.js`](js/config.js).
 
 **Signed projects must have their signed CE on file.** A Universe project whose
 Status is *Fully Closed*, *For Closing*, *For Collection* or *Signed CE* gets a card
@@ -782,6 +793,7 @@ the live tables.
 | *Polaris couldn't confirm it. Check it in Lark before retrying.* (queue) | The answer never came back and Lark couldn't be re-read. Look at the row in Lark; **Retry** only if it isn't there. |
 | A card you pushed isn't in the list | It's in the queue (hover **Queue**). **Remove** there brings it back. |
 | *These columns don't match what Polaris expects…* | A column was renamed or changed type (common when switching to production). Fix the table, or run `npm run setup` for a missing column or option. |
+| A greyed-out **Fill** or **Push** on a card | Hover it: it says which column is missing or wrong (the tab's red box lists them too). Only the cards that need that column are off. |
 | *Your login can only read the tables.* | Log in again so Lark grants editing. |
 | *Lark says your account can't open or edit this Base.* | Ask the Base owner for edit access. |
 | *Your account isn't allowed to change this table (its permissions are restricted).* | Ask the Base owner. |
