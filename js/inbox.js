@@ -1417,6 +1417,34 @@ export function createInbox(ctx) {
 
   /* ======================= small inputs ======================= */
 
+  /* A suggestion list floats over the page under its field (above it when there's
+     no room below), so the form's scrolling body and rounded card don't clip it.
+     It follows the field while anything scrolls or the window resizes. */
+  function floatList(list, anchor) {
+    let on = false;
+    const place = () => {
+      if (list.hidden) return;
+      const r = anchor.getBoundingClientRect();
+      const below = innerHeight - r.bottom - 12, above = r.top - 12;
+      const up = below < 200 && above > below;
+      Object.assign(list.style, { position: "fixed", right: "auto", left: `${r.left}px`, width: `${r.width}px`,
+        maxHeight: `${Math.max(120, Math.min(248, (up ? above : below) - 6))}px`,
+        top: up ? "auto" : `${r.bottom + 6}px`, bottom: up ? `${innerHeight - r.top + 6}px` : "auto" });
+      // Inside a transformed parent (the dialog while it animates in) "fixed" is
+      // measured from that parent: move it by however far off it landed.
+      const got = list.getBoundingClientRect();
+      const dx = got.left - r.left, dy = up ? got.bottom - (r.top - 6) : got.top - (r.bottom + 6);
+      if (dx || dy) {
+        list.style.left = `${r.left - dx}px`;
+        if (up) list.style.bottom = `${innerHeight - r.top + 6 + dy}px`; else list.style.top = `${r.bottom + 6 - dy}px`;
+      }
+    };
+    return {
+      open() { place(); if (!on) { on = true; addEventListener("scroll", place, true); addEventListener("resize", place); } },
+      close() { if (on) { on = false; removeEventListener("scroll", place, true); removeEventListener("resize", place); } },
+    };
+  }
+
   /* A text input with suggestions (free text allowed). */
   function suggestInput({ id, value, placeholder, options, onChange }) {
     const input = h("input", { type: "text", id, autocomplete: "off", placeholder, role: "combobox",
@@ -1424,8 +1452,9 @@ export function createInbox(ctx) {
     input.value = value || "";
     const list = h("ul", { class: "suggest", role: "listbox", hidden: true });
     const wrap = h("div", { class: "picker" }, input, list);
+    const float = floatList(list, input);
     let items = [], active = -1;
-    const close = () => { list.hidden = true; input.setAttribute("aria-expanded", "false"); active = -1; };
+    const close = () => { list.hidden = true; float.close(); input.setAttribute("aria-expanded", "false"); active = -1; };
     const pick = (v) => { input.value = v; onChange(v); close(); };
     const show = () => {
       const q = input.value.trim().toLowerCase();
@@ -1434,6 +1463,7 @@ export function createInbox(ctx) {
       list.replaceChildren(...items.map((o, i) => h("li", { role: "option", "aria-selected": "false",
         onmousedown: (e) => { e.preventDefault(); pick(o); } }, o)));
       list.hidden = !items.length;
+      if (items.length) float.open(); else float.close();
       input.setAttribute("aria-expanded", String(!!items.length));
     };
     input.addEventListener("input", () => { onChange(input.value); show(); });
@@ -1452,13 +1482,14 @@ export function createInbox(ctx) {
     const box = h("div", { class: "picker-box", onclick: () => input.focus() }, chips, input);
     const list = h("ul", { class: "suggest", role: "listbox", hidden: true });
     const wrap = h("div", { class: "picker" }, box, list);
+    const float = floatList(list, box);
     let items = [], active = -1;
 
     const paintChips = () => chips.replaceChildren(...chosen.map((p, i) => h("span", { class: "chip" }, p.name,
       h("button", { type: "button", "aria-label": `Remove ${p.name}`, onclick: (e) => {
         e.stopPropagation(); chosen.splice(i, 1); paintChips(); onChange([...chosen]); input.focus();
       } }, ic("x")))));
-    const close = () => { list.hidden = true; input.setAttribute("aria-expanded", "false"); active = -1; };
+    const close = () => { list.hidden = true; float.close(); input.setAttribute("aria-expanded", "false"); active = -1; };
     const add = (p) => {
       if (single) chosen.length = 0;
       if (!chosen.some(x => x.id === p.id)) chosen.push({ id: p.id, name: p.name, email: p.email });
@@ -1477,6 +1508,7 @@ export function createInbox(ctx) {
         q && !items.length ? h("li", { class: "suggest-head", role: "presentation" }, "No one by that name") : null,
       ].filter(Boolean));
       list.hidden = !list.children.length;
+      if (list.hidden) float.close(); else float.open();
       input.setAttribute("aria-expanded", String(!list.hidden));
     };
     input.addEventListener("focus", show);

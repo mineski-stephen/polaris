@@ -9,6 +9,12 @@ or links stop working), add an entry here with the same number and the date,
 and say what changed in the team's words. `npm run check:shell` fails if the
 two numbers differ.
 
+## 1.9.3 · Oct 29, 2026
+
+- **Fixed:** the list of people under a picker (PM, BD, AM) was cut off inside
+  the push form, so you couldn't see or click it. It now opens over the page,
+  above the field when there's no room below.
+
 ## 1.9.2 · Oct 29, 2026
 
 - **Changed:** the login page shows the version under the name instead of a
