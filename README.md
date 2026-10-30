@@ -15,7 +15,7 @@ phone and on a PC, and every change is made as you, with your own Lark login.
 | **Invoice Request** (by Account Managers) | moves its Collections row along: **Pending Invoice Request Approval** when filed, **For Collection** when approved |
 | **Project Brief** (any department) | a new **ANDON** row (Project Management's board) |
 | **Project Approval (PAR)** | its Request No. in the **Approval** column of the project's ANDON row |
-| **ANDON files** (its **Attachment** column) | copies in the project's Universe **Other Attachments** |
+| **Project Brief** files (its **Attachments**) | copies in the project's Universe **Other Attachments** |
 
 > **Connected to the live tables.** `APP.env` in `js/config.js` is `"live"`, so the
 > header shows no *Test copy* badge and every push changes real data. See
@@ -282,18 +282,19 @@ link. Only a blank Approval is written: if someone filled it meanwhile, theirs s
 and the queue says so. The column is `andonApproval` in [`js/config.js`](js/config.js);
 if ANDON has no column by that name, there are no cards.
 
-### ANDON files → the Universe
+### The brief's files → the Universe
 
 On the **Universe** tab, after the briefs and PARs: every Universe row whose project
-has files in ANDON's **Attachment** (in any ANDON row with its Project Code) that its
-**Other Attachments** doesn't have yet gets a card (*2 files from ANDON's Attachment ·
-into the Universe's Other Attachments*). A file counts as there when one with the same
-name and size is, since a copy gets a new file token. **Copy** downloads each file from
-ANDON and uploads it to the Universe's Base, as you, then adds them after what Other
-Attachments already holds (nothing there is removed or replaced). Both rows are read
+has files in its Project Brief's **Attachments** (on any brief with its Project Code
+that wasn't recalled, rejected or cancelled) that its **Other Attachments** doesn't
+have yet gets a card (*2 files on the brief's Attachments · into the Universe's Other
+Attachments*). A file counts as there when one with the same name and size is, since a
+copy gets a new file token. **Copy** downloads each file from the brief and uploads it
+to the Universe, as you, then adds them after what Other Attachments already holds
+(nothing there is removed or replaced). Both rows are read
 again first, so a file someone added meanwhile isn't copied twice. A file over 10 MB
 can't go through the connection service: the card names it, to upload in Lark. The
-columns are `andonFiles` in [`js/config.js`](js/config.js); if either table has no
+columns are `briefFiles` in [`js/config.js`](js/config.js); if either table has no
 column by that name, there are no cards.
 
 ### Collections changes
@@ -756,10 +757,9 @@ the live tables.
 
 ## Known limits
 
-- **Attachments.** The brief's attachments live in Lark Approval, which this app
-  has no permission to read, so their files can't be copied (ANDON's can: see
-  *ANDON files → the Universe*). Files over 10 MB don't fit through the connection
-  service and are left for you to upload in Lark. Add links by hand
+- **Attachments.** Files over 10 MB don't fit through the connection service, so
+  the Universe tab's file cards leave them for you to upload in Lark (see *The
+  brief's files → the Universe*). Add links by hand
   under *Add other links* if needed.
 - **Client** isn't on the Project Brief, so it's typed in the sheet (or left for later).
 - **Old PARs and invoices.** Nothing in those tables is marked IGNORE yet, so older

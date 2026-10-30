@@ -1225,32 +1225,34 @@ test("PM audit: a project whose PM differs between the Universe and ANDON, or is
   assert.equal(pmCards(uni, andon, RULES, { fields: { universe: [{ field_name: "Project" }] } }).cards.length, 0);
 });
 
-test("ANDON files: a Universe row gets a card for the files its Other Attachments lacks", () => {
+test("brief files: a Universe row gets a card for the files its Other Attachments lacks", () => {
   const seg = (text) => [{ type: "text", text }];
   const file = (tok, name, size) => ({ file_token: tok, name, size, type: "application/pdf" });
   const MB = 1024 * 1024;
-  const andon = [
-    { record_id: "a1", fields: { "Project Code": seg("2026TEG-P0001"), "Attachment": [file("bA", "brief.pdf", 100), file("bB", "deck.pdf", 200)] } },
-    { record_id: "a2", fields: { "Project Code": seg("2026teg-p0001"), "Attachment": [file("bC", "brief.pdf", 100), file("bD", "video.mp4", 40 * MB)] } },
-    { record_id: "a3", fields: { "Project Code": seg("2026TEG-P0002"), "Attachment": [file("bE", "plan.pdf", 5)] } },
+  const briefs = [
+    { record_id: "a1", fields: { "Project Code": seg("2026TEG-P0001"), "Status": "Approved", "Attachments": [file("bA", "brief.pdf", 100), file("bB", "deck.pdf", 200)] } },
+    { record_id: "a2", fields: { "Project Code": seg("2026teg-p0001"), "Status": "Approved", "Attachments": [file("bC", "brief.pdf", 100), file("bD", "video.mp4", 40 * MB)] } },
+    { record_id: "a3", fields: { "Project Code": seg("2026TEG-P0002"), "Status": "Approved", "Attachments": [file("bE", "plan.pdf", 5)] } },
+    // a withdrawn brief's files aren't copied
+    { record_id: "a4", fields: { "Project Code": seg("2026TEG-P0003"), "Status": "Recalled", "Attachments": [file("bF", "old.pdf", 9)] } },
   ];
   const universe = [
     // has brief.pdf already (another token: a copy), so only deck.pdf and the video are missing
     { record_id: "u1", fields: { "Project Code": seg("2026TEG-P0001"), "Project": seg("Summer Cup"), "Other Attachments": [file("uX", "Brief.pdf", 100)] } },
     { record_id: "u2", fields: { "Project Code": seg("2026TEG-P0002"), "Other Attachments": [file("uY", "plan.pdf", 5)] } },   // has it all
-    { record_id: "u3", fields: { "Project Code": seg("2026TEG-P0003") } },   // nothing in ANDON
+    { record_id: "u3", fields: { "Project Code": seg("2026TEG-P0003") } },   // only a recalled brief
   ];
-  const { cards } = fileCards(universe, andon, RULES, { maxMb: 10 });
+  const { cards } = fileCards(universe, briefs, RULES, { maxMb: 10 });
   assert.equal(cards.length, 1);
   const c = cards[0];
   assert.equal(c.kind, "files");
   assert.equal(c.rowId, "u1");
-  assert.deepEqual(c.files.map(f => [f.name, f.andonRow]), [["deck.pdf", "a1"]]);
+  assert.deepEqual(c.files.map(f => [f.name, f.sourceRow]), [["deck.pdf", "a1"]]);
   assert.deepEqual(c.tooBig.map(f => f.name), ["video.mp4"]);
   assert.deepEqual(c.have.map(f => f.file_token), ["uX"]);
-  // the same file in two ANDON rows is copied once
+  // the same file on two briefs is copied once
   assert.deepEqual(missingFiles([file("1", "a.pdf", 1), file("2", "a.pdf", 1), file("3", "a.pdf", 2)], []).map(f => f.file_token), ["1", "3"]);
   // a table without its column gives no cards
-  const fields = { universe: [{ field_name: "Project Code" }], andon: [{ field_name: "Attachment" }] };
-  assert.equal(fileCards(universe, andon, RULES, { fields }).cards.length, 0);
+  const fields = { universe: [{ field_name: "Project Code" }], brief: [{ field_name: "Attachments" }] };
+  assert.equal(fileCards(universe, briefs, RULES, { fields }).cards.length, 0);
 });

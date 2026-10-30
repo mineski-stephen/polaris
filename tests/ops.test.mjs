@@ -284,15 +284,15 @@ test("PM sync: both tables get the one PM; a PM changed meanwhile in either stop
     (err) => err instanceof AlreadyDone);
 });
 
-test("ANDON files: downloaded, uploaded to the Universe's Base and added beside what's there", async () => {
+test("brief files: downloaded, uploaded to the Universe and added beside what's there", async () => {
   const file = (tok, name, size) => ({ file_token: tok, name, size, type: "application/pdf" });
-  const TT = { universe: { app: "APP1", table: "tblUni" }, andon: { app: "APP2", table: "tblAnd" } };
+  const TT = { universe: { app: "APP1", table: "tblUni" }, brief: { app: "APP1", table: "tblBrief" } };
   const fresh = () => [
     { record_id: "u1", fields: { "Other Attachments": [file("uX", "brief.pdf", 100)] } },
-    { record_id: "a1", fields: { "Attachment": [file("bA", "brief.pdf", 100), file("bB", "deck.pdf", 200), file("bC", "notes.pdf", 7)] } },
+    { record_id: "a1", fields: { "Attachments": [file("bA", "brief.pdf", 100), file("bB", "deck.pdf", 200), file("bC", "notes.pdf", 7)] } },
   ];
-  const card = { rowId: "u1", field: "Other Attachments", from: "Attachment",
-                 files: [{ ...file("bB", "deck.pdf", 200), andonRow: "a1" }, { ...file("bC", "notes.pdf", 7), andonRow: "a1" }] };
+  const card = { rowId: "u1", field: "Other Attachments", from: "Attachments",
+                 files: [{ ...file("bB", "deck.pdf", 200), sourceRow: "a1" }, { ...file("bC", "notes.pdf", 7), sourceRow: "a1" }] };
   const downloads = [], uploads = [];
   const io = {
     download: async (f) => { downloads.push(f.file_token); return `bytes of ${f.name}`; },

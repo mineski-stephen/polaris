@@ -11,8 +11,8 @@ two numbers differ.
 
 ## 1.10.0 · Oct 30, 2026
 
-- **New:** the Universe tab shows projects whose ANDON **Attachment** has files
-  the Universe's **Other Attachments** doesn't. **Copy** brings them over (added
+- **New:** the Universe tab shows projects whose Project Brief **Attachments** has
+  files the Universe's **Other Attachments** doesn't. **Copy** brings them over (added
   beside what's there, nothing replaced). A file counts as there when one with the
   same name and size is. Files over 10 MB are named on the card, to upload in Lark.
 

@@ -122,11 +122,11 @@ export const RULES = {
   // PAR's Request No. (its number, linking to the approval) in `field`, a link
   // column, while it's blank: one card per row, pushed like a PAR to the Universe.
   andonApproval: { field: "Approval" },
-  // Universe tab: a project's files in ANDON (`from`, every ANDON row with its code)
-  // that its Universe row's `to` doesn't have yet (matched by name and size: a copy
-  // gets a new file_token) get a card, whose Copy downloads them from ANDON and
-  // uploads them to the Universe, beside what's already there.
-  andonFiles: { from: "Attachment", to: "Other Attachments" },
+  // Universe tab: a project's files on its Project Brief (`from`, every brief with its
+  // code that wasn't voided) that its Universe row's `to` doesn't have yet (matched by
+  // name and size: a copy gets a new file_token) get a card, whose Copy downloads them
+  // from the brief and uploads them to the Universe, beside what's already there.
+  briefFiles: { from: "Attachments", to: "Other Attachments" },
   // The audit: a project's PM must be the same in the Universe (`universe`) and in
   // its ANDON row(s) (`andon`). If they differ or either is blank, it gets an Audit
   // card whose Fill sets one PM in both; the Fill is refused while it's blank.

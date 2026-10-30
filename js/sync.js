@@ -799,7 +799,7 @@ export function approvalCards(andon, pars, rules, { fields } = {}) {
   return { cards, hidden };
 }
 
-/* ======================= ANDON files → the Universe ======================= */
+/* ======================= the brief's files → the Universe ======================= */
 
 /* The files in an attachment cell, as {file_token, name, size, type} (what download needs). */
 export const filesIn = (v) => (Array.isArray(v) ? v : []).filter(f => f && typeof f === "object" && f.file_token)
@@ -814,20 +814,21 @@ export function missingFiles(from, cell) {
   return from.filter(f => { const k = fileKey(f); return !seen.has(k) && seen.add(k); });
 }
 
-/* The Universe tab's file cards: a Universe row whose project has files in ANDON
-   (rules.andonFiles.from, in every ANDON row with its code) that its
-   rules.andonFiles.to doesn't have yet. One card per Universe row; each file keeps
-   the ANDON row it's in. Files over `maxMb` can't go through the connection service:
+/* The Universe tab's file cards: a Universe row whose project has files on its
+   Project Brief (rules.briefFiles.from, on every brief with its code that wasn't
+   voided) that its rules.briefFiles.to doesn't have yet. One card per Universe row;
+   each file keeps the brief it's on (sourceRow). Files over `maxMb` can't go through the connection service:
    they're listed in card.tooBig (to upload in Lark) and not copied. A table without
    its column (in `fields`) gives no cards. Newest project codes first. */
-export function fileCards(universe, andon, rules, { fields = {}, maxMb = 0 } = {}) {
-  const cfg = rules.andonFiles;
+export function fileCards(universe, briefs, rules, { fields = {}, maxMb = 0 } = {}) {
+  const cfg = rules.briefFiles;
   const has = (table, col) => !fields[table] || fields[table].some(f => f.field_name === col);
-  if (!cfg || !has("universe", cfg.to) || !has("andon", cfg.from)) return { cards: [] };
+  if (!cfg || !has("universe", cfg.to) || !has("brief", cfg.from)) return { cards: [] };
   const byCode = new Map();
-  for (const r of andon || []) {
+  for (const r of briefs || []) {
+    if (rules.voidStatuses.includes(clean((r.fields || {})["Status"]))) continue;
     const code = normCode(plain((r.fields || {})["Project Code"]));
-    const files = filesIn((r.fields || {})[cfg.from]).map(f => ({ ...f, andonRow: r.record_id }));
+    const files = filesIn((r.fields || {})[cfg.from]).map(f => ({ ...f, sourceRow: r.record_id }));
     if (code && files.length) byCode.set(code, [...(byCode.get(code) || []), ...files]);
   }
   const cards = [];

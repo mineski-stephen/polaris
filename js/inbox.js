@@ -367,7 +367,7 @@ export function createInbox(ctx) {
       h("div", { class: "item-actions" }, mainButton("Push", "approval", () => openSheet(c))));
   }
 
-  /* A Universe row whose project has files in ANDON that its Other Attachments
+  /* A Universe row whose project has files on its brief that its Other Attachments
      doesn't: Copy brings them over. Files too big for the connection service are
      named, to upload in Lark (the button is off when only those are left). */
   function filesCardEl(c) {
@@ -382,7 +382,7 @@ export function createInbox(ctx) {
         c.status ? h("span", { class: `badge ${BADGE[c.status] || ""}` }, c.status) : null,
         h("span", { class: "item-date" }, "")),
       h("h3", null, c.name || "(no name)"),
-      h("p", { class: "item-meta" }, `${n} file${n === 1 ? "" : "s"} from ANDON's ${c.from} · into the Universe's ${c.field}`),
+      h("p", { class: "item-meta" }, `${n} file${n === 1 ? "" : "s"} on the brief's ${c.from} · into the Universe's ${c.field}`),
       c.tooBig.length ? h("ul", { class: "notes" }, h("li", { class: "is-plain" },
         `Too big to copy here: ${c.tooBig.map(f => f.name).join(", ")}. Upload ${c.tooBig.length === 1 ? "it" : "them"} in Lark.`)) : null,
       h("div", { class: "item-actions" }, btn));
@@ -1000,7 +1000,7 @@ export function createInbox(ctx) {
                                      audit: `Fill blanks in ${c.target === "andon" ? "ANDON" : "the Universe"}`,
                                      edit: `Changes to this ${EDIT_WHERE[c.table]} row`, view: TABLE_TITLES[c.table],
                                      approval: "Add approval to ANDON", pm: "Set the PM in the Universe and ANDON",
-                                     files: "Copy ANDON files to the Universe" }[c.kind];
+                                     files: "Copy the brief's files to the Universe" }[c.kind];
     $("#sheetSub").replaceChildren(copyable(c.code, { label: "project code", empty: "No code" }),
       ...((c.kind === "par" || c.kind === "invoice" || c.kind === "view" || c.kind === "approval") && c.requestNo ? [" · request ", copyable(c.requestNo, { label: "request number" })] : []), ` · ${c.name}`);
     go.querySelector(".label").textContent = { brief: "Push to Universe", par: "Add PAR", invoice: "Add to Collections", andon: "Add to ANDON", audit: "Fill",
@@ -1131,13 +1131,13 @@ export function createInbox(ctx) {
       `Open ${c.requestNo || "the approval"} in Lark`, ic("external")) : null);
   }
 
-  /* --- ANDON files → the Universe: nothing to choose; each file downloads from ANDON. --- */
+  /* --- the brief's files → the Universe: nothing to choose; each file downloads from the brief. --- */
   function buildFiles(body, c) {
     sheet.refresh = paintDoc;
     const kb = (n) => (n ? h("span", { class: "file-size" }, ` (${Math.max(1, Math.round(n / 1024)).toLocaleString()} KB)`) : null);
     const item = (f) => h("li", null, h("button", { type: "button", class: "file-dl", title: `Download ${f.name}`,
-      onclick: (e) => ctx.downloadFile("andon", f, e.currentTarget) }, ic("download"), h("span", { class: "file-name" }, f.name, kb(f.size))));
-    put(body, fieldEl(`From ANDON's ${c.from}`, false, h("ul", { class: "files" }, c.files.map(item))),
+      onclick: (e) => ctx.downloadFile("brief", f, e.currentTarget) }, ic("download"), h("span", { class: "file-name" }, f.name, kb(f.size))));
+    put(body, fieldEl(`From the brief's ${c.from}`, false, h("ul", { class: "files" }, c.files.map(item))),
       c.tooBig.length ? h("p", { class: "note" }, `Not copied, too big for Polaris (over ${LARK.maxUploadMb} MB): ` +
         `${c.tooBig.map(f => f.name).join(", ")}. Upload ${c.tooBig.length === 1 ? "it" : "them"} in Lark.`) : null);
   }
@@ -1328,7 +1328,7 @@ export function createInbox(ctx) {
     }
     if (c.kind === "files") {   // the cell as it'll be: what it has, then the copies (by name)
       const n = c.files.length;
-      return { ...base, verb: `Copy ${n} file${n === 1 ? "" : "s"} from ANDON`, table: "universe", rowId: c.rowId,
+      return { ...base, verb: `Copy ${n} file${n === 1 ? "" : "s"} from the brief`, table: "universe", rowId: c.rowId,
                fields: { [c.field]: [...c.have, ...c.files].map(f => ({ name: f.name })) } };
     }
     if (c.kind === "pm") {   // the Universe row beside the sheet (ANDON gets the same)
@@ -1389,11 +1389,11 @@ export function createInbox(ctx) {
       return { res, payload, extra: { pmName: p.name } };
     }
     if (c.kind === "files") {
-      // Downloaded from ANDON and uploaded to the Universe as you, through the
+      // Downloaded from the brief and uploaded to the Universe as you, through the
       // connection service; the tokens stay in the job, so a retry doesn't upload twice.
       ch.copied = ch.copied || {};
       res = await copyFiles(ctx.call, ctx.tables, c, { done: ch.copied, onStatus,
-        download: (f) => downloadFromBase(attachmentRequest(f, ctx.tables.andon.table, LARK.api), ctx.token()),
+        download: (f) => downloadFromBase(attachmentRequest(f, ctx.tables.brief.table, LARK.api), ctx.token()),
         upload: (blob, f, onProgress) => uploadToBase(new File([blob], f.name, { type: blob.type || f.type || "" }),
           ctx.tables.universe, ctx.token(), { onProgress }) });
       return { res, payload: res.written, extra };
