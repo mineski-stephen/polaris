@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { RULES } from "../js/config.js";
-import { saveInvoiceDetails, fillGaps, createRecord, AlreadyDone, columnsToRead, schemaSpec, saveEdit, EditConflict, setTag, loadEverything, syncPm } from "../js/ops.js";
+import { saveInvoiceDetails, fillGaps, createRecord, AlreadyDone, columnsToRead, schemaSpec, saveEdit, EditConflict, setTag, loadEverything, syncPm, copyFiles } from "../js/ops.js";
 import { collectionRow, pmWrites } from "../js/sync.js";
 import { LarkError, isUncertain } from "../js/errors.js";
 
@@ -282,4 +282,50 @@ test("PM sync: both tables get the one PM; a PM changed meanwhile in either stop
   lark = fakeLark(data);
   await assert.rejects(syncPm(lark.call, TT, [{ table: "universe", rowId: "u1", loaded: data[0].fields }, { table: "andon", rowId: "a1", loaded: data[1].fields }], writes, defsOf),
     (err) => err instanceof AlreadyDone);
+});
+
+test("ANDON files: downloaded, uploaded to the Universe's Base and added beside what's there", async () => {
+  const file = (tok, name, size) => ({ file_token: tok, name, size, type: "application/pdf" });
+  const TT = { universe: { app: "APP1", table: "tblUni" }, andon: { app: "APP2", table: "tblAnd" } };
+  const fresh = () => [
+    { record_id: "u1", fields: { "Other Attachments": [file("uX", "brief.pdf", 100)] } },
+    { record_id: "a1", fields: { "Attachment": [file("bA", "brief.pdf", 100), file("bB", "deck.pdf", 200), file("bC", "notes.pdf", 7)] } },
+  ];
+  const card = { rowId: "u1", field: "Other Attachments", from: "Attachment",
+                 files: [{ ...file("bB", "deck.pdf", 200), andonRow: "a1" }, { ...file("bC", "notes.pdf", 7), andonRow: "a1" }] };
+  const downloads = [], uploads = [];
+  const io = {
+    download: async (f) => { downloads.push(f.file_token); return `bytes of ${f.name}`; },
+    upload: async (blob, f) => { uploads.push(blob); return `new-${f.file_token}`; },
+  };
+  let data = fresh(), lark = fakeLark(data);
+  const done = {};
+  const res = await copyFiles(lark.call, TT, card, { ...io, done });
+  assert.deepEqual(downloads, ["bB", "bC"]);
+  assert.deepEqual(uploads, ["bytes of deck.pdf", "bytes of notes.pdf"]);
+  assert.deepEqual(lark.writes()[0].body.records[0].fields["Other Attachments"], [{ file_token: "uX" }, { file_token: "new-bB" }, { file_token: "new-bC" }]);
+  assert.deepEqual(res.copied, ["deck.pdf", "notes.pdf"]);
+  assert.deepEqual(res.cell.map(f => f.name), ["brief.pdf", "deck.pdf", "notes.pdf"]);
+  assert.deepEqual(res.mismatches, []);
+
+  // a retry reuses what was uploaded; someone already added notes.pdf: only deck.pdf goes in
+  data = fresh();
+  data[0].fields["Other Attachments"].push(file("uZ", "notes.pdf", 7));
+  lark = fakeLark(data);
+  downloads.length = 0;
+  await copyFiles(lark.call, TT, card, { ...io, done });
+  assert.deepEqual(downloads, []);
+  assert.deepEqual(lark.writes()[0].body.records[0].fields["Other Attachments"].map(f => f.file_token), ["uX", "uZ", "new-bB"]);
+
+  // the Universe has them all now: nothing is written
+  data = fresh();
+  data[0].fields["Other Attachments"].push(file("u2", "deck.pdf", 200), file("u3", "notes.pdf", 7));
+  lark = fakeLark(data);
+  await assert.rejects(copyFiles(lark.call, TT, card, io), (err) => err instanceof AlreadyDone);
+  assert.equal(lark.writes().length, 0);
+
+  // a download that fails writes nothing
+  data = fresh(); lark = fakeLark(data);
+  await assert.rejects(copyFiles(lark.call, TT, card, { ...io, download: async () => { throw new Error("no"); } }), /no/);
+  assert.equal(lark.writes().length, 0);
 });

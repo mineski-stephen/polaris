@@ -9,7 +9,7 @@ import {
   indexUniverse, indexCollections, briefCards, parCards, collectionCards, collectionsChange,
   universeFromBrief, verifyWritten, similarity, vatMentions,
   peoplePool, universeView, shortName, andonFromBrief, collectionsView, collectionRow, invoiceDetailsPatch,
-  auditCards, auditPatch, parseDay, fillPlan, invoiceChangedSince, draftsToJSON, draftsFromJSON, queueToJSON, queueFromJSON, cellText, parApprovals, approvalCards, pmCards, attachmentRequest, attachmentLinkRequest, attachmentLink, isWonProject, auditMissing, monthOf,
+  auditCards, auditPatch, parseDay, fillPlan, invoiceChangedSince, draftsToJSON, draftsFromJSON, queueToJSON, queueFromJSON, cellText, parApprovals, approvalCards, pmCards, fileCards, missingFiles, attachmentRequest, attachmentLinkRequest, attachmentLink, isWonProject, auditMissing, monthOf,
   needsSignedCe, auditFilesMissing, isBlank,
   matchesQuery, andonView, canEditField, editChanges, editWrite, editCheck, editKey, writeValueOf,
   tagsOf, tagsWith, tagsWithout, variableColumns, customTagsFrom, customTagOf, tagGroups,
@@ -1223,4 +1223,34 @@ test("PM audit: a project whose PM differs between the Universe and ANDON, or is
   assert.deepEqual(by.u2.loaded.andon.a2, { "PM (LEAD)": p("ou_b", "Ben") });
   // a table without its PM column: no cards
   assert.equal(pmCards(uni, andon, RULES, { fields: { universe: [{ field_name: "Project" }] } }).cards.length, 0);
+});
+
+test("ANDON files: a Universe row gets a card for the files its Other Attachments lacks", () => {
+  const seg = (text) => [{ type: "text", text }];
+  const file = (tok, name, size) => ({ file_token: tok, name, size, type: "application/pdf" });
+  const MB = 1024 * 1024;
+  const andon = [
+    { record_id: "a1", fields: { "Project Code": seg("2026TEG-P0001"), "Attachment": [file("bA", "brief.pdf", 100), file("bB", "deck.pdf", 200)] } },
+    { record_id: "a2", fields: { "Project Code": seg("2026teg-p0001"), "Attachment": [file("bC", "brief.pdf", 100), file("bD", "video.mp4", 40 * MB)] } },
+    { record_id: "a3", fields: { "Project Code": seg("2026TEG-P0002"), "Attachment": [file("bE", "plan.pdf", 5)] } },
+  ];
+  const universe = [
+    // has brief.pdf already (another token: a copy), so only deck.pdf and the video are missing
+    { record_id: "u1", fields: { "Project Code": seg("2026TEG-P0001"), "Project": seg("Summer Cup"), "Other Attachments": [file("uX", "Brief.pdf", 100)] } },
+    { record_id: "u2", fields: { "Project Code": seg("2026TEG-P0002"), "Other Attachments": [file("uY", "plan.pdf", 5)] } },   // has it all
+    { record_id: "u3", fields: { "Project Code": seg("2026TEG-P0003") } },   // nothing in ANDON
+  ];
+  const { cards } = fileCards(universe, andon, RULES, { maxMb: 10 });
+  assert.equal(cards.length, 1);
+  const c = cards[0];
+  assert.equal(c.kind, "files");
+  assert.equal(c.rowId, "u1");
+  assert.deepEqual(c.files.map(f => [f.name, f.andonRow]), [["deck.pdf", "a1"]]);
+  assert.deepEqual(c.tooBig.map(f => f.name), ["video.mp4"]);
+  assert.deepEqual(c.have.map(f => f.file_token), ["uX"]);
+  // the same file in two ANDON rows is copied once
+  assert.deepEqual(missingFiles([file("1", "a.pdf", 1), file("2", "a.pdf", 1), file("3", "a.pdf", 2)], []).map(f => f.file_token), ["1", "3"]);
+  // a table without its column gives no cards
+  const fields = { universe: [{ field_name: "Project Code" }], andon: [{ field_name: "Attachment" }] };
+  assert.equal(fileCards(universe, andon, RULES, { fields }).cards.length, 0);
 });

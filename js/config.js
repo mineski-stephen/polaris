@@ -9,7 +9,7 @@
 
 /* version: bump it with every release and add an entry to CHANGELOG.md (newest first, same number).
    The top bar shows it beside the name, so people can see at a glance which version they're running. */
-export const APP = { name: "Polaris", key: "polaris", version: "1.9.4", env: "live" };   // env: "live" | "test"
+export const APP = { name: "Polaris", key: "polaris", version: "1.10.0", env: "live" };   // env: "live" | "test"
 export const ENV_LABEL = APP.env === "test" ? "Test copy" : "";         // shown in the header, never a gate
 
 /* The connection service: the shared Lark proxy (Render). `service` is the name its
@@ -122,6 +122,11 @@ export const RULES = {
   // PAR's Request No. (its number, linking to the approval) in `field`, a link
   // column, while it's blank: one card per row, pushed like a PAR to the Universe.
   andonApproval: { field: "Approval" },
+  // Universe tab: a project's files in ANDON (`from`, every ANDON row with its code)
+  // that its Universe row's `to` doesn't have yet (matched by name and size: a copy
+  // gets a new file_token) get a card, whose Copy downloads them from ANDON and
+  // uploads them to the Universe, beside what's already there.
+  andonFiles: { from: "Attachment", to: "Other Attachments" },
   // The audit: a project's PM must be the same in the Universe (`universe`) and in
   // its ANDON row(s) (`andon`). If they differ or either is blank, it gets an Audit
   // card whose Fill sets one PM in both; the Fill is refused while it's blank.

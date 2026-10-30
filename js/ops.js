@@ -8,7 +8,7 @@
 
 import {
   indexUniverse, indexCollections, verifyWritten, parAfterAdding, clean, fillPlan, invoiceChangedSince, editCheck,
-  tagsWith, tagsWithout,
+  tagsWith, tagsWithout, filesIn, fileKey, missingFiles,
 } from "./sync.js";
 import { LARK } from "./config.js";
 import { LarkError } from "./errors.js";
@@ -65,6 +65,8 @@ export function schemaSpec(rules) {
              "Quick Remarks",
              // …and what a won (or lost) project must have (the audit asks for these)
              ...rules.auditRequired.fields, ...rules.auditLost.fields, rules.auditFiles.field,
+             // …and the files copied over from ANDON
+             rules.andonFiles.to,
              // …and the custom tags an audit card is marked with
              ...(tagsIn("universe") ? [rules.tags.field] : [])],
       index: ["Project Code", "Project", "Client", "PAR"],
@@ -79,7 +81,7 @@ export function schemaSpec(rules) {
       // Hides a won project from the Invoices list, if the Universe has this column.
       // The signed CE: an attachment the audit uploads to (its type is checked if it's there).
       // Custom tags (plain text, comma-separated): "Mark as …" on an audit card writes here.
-      optional: { [rules.universeIgnoreField]: T.checkbox, [rules.auditFiles.field]: T.file,
+      optional: { [rules.universeIgnoreField]: T.checkbox, [rules.auditFiles.field]: T.file, [rules.andonFiles.to]: T.file,
                   ...(tagsIn("universe") ? { [rules.tags.field]: T.text } : {}) },
       options: {
         "VAT%": ["12%", "0%"],
@@ -91,6 +93,8 @@ export function schemaSpec(rules) {
       neededBy: { invoice: ["Amount (VAT-Inc.)", "Business Unit"],
                   // the audit can't ask for a column the Universe doesn't have
                   "audit:universe": [...rules.auditRequired.fields, ...rules.auditLost.fields, rules.auditFiles.field],
+                  // ANDON's files are copied into this one
+                  files: [rules.andonFiles.to],
                   // without a Tags column, only "Mark as …" stops (Hide on this device still works)
                   ...(tagsIn("universe") ? { "tag:universe": [rules.tags.field] } : {}) },
     },
@@ -129,8 +133,10 @@ export function schemaSpec(rules) {
         "Project": T.text, "Project Code": T.text, "AM": T.user, "PM (LEAD)": T.user, "MKT (PITCH)": T.user,
         "Business Unit": T.select, "Tools": T.multi, "TRIBE": T.select, "Event Start": T.date, "Event End": T.date,
       },
-      // Custom tags, only if rules.tags.tables lists ANDON (it doesn't: no Tags column there).
-      ...(tagsIn("andon") ? { optional: { [rules.tags.field]: T.text }, neededBy: { "tag:andon": [rules.tags.field] } } : {}),
+      // The files the Universe tab copies into the Universe's Other Attachments; and custom
+      // tags, only if rules.tags.tables lists ANDON (it doesn't: no Tags column there).
+      optional: { [rules.andonFiles.from]: T.file, ...(tagsIn("andon") ? { [rules.tags.field]: T.text } : {}) },
+      neededBy: { files: [rules.andonFiles.from], ...(tagsIn("andon") ? { "tag:andon": [rules.tags.field] } : {}) },
     },
     variables: {
       // Settings the team keeps in Lark, one row per value (RULES.tags). Every column is
@@ -459,6 +465,46 @@ export async function fillGaps(call, t, recordId, patch, overwrite = {}) {
   }
   await updateRecord(call, t, recordId, written);
   return { recordId, written, skipped, ...await readBack(call, t, recordId, written) };
+}
+
+/* ANDON's files → a Universe row's attachment column (card from fileCards). The
+   ANDON rows are re-read first: only the card's files ANDON still has and the
+   Universe still lacks are copied (none: AlreadyDone). Each is downloaded from
+   ANDON's Base and uploaded to the Universe's (a file_token belongs to one Base):
+   `download(file)` → Blob, `upload(blob, file, onProgress)` → file_token. Tokens
+   go into `done` (by fileKey), so a retry doesn't upload a file twice; a failed
+   download or upload writes nothing. Then the Universe row is re-read and its cell
+   written as what it holds now plus the new files, read back and compared.
+   Resolves { recordId, written, cell (the files, with names), copied, mismatches, readBackError }. */
+export async function copyFiles(call, tables, card, { download, upload, onStatus = () => {}, done = {} }) {
+  const want = new Set(card.files.map(fileKey));
+  const rows = await Promise.all([...new Set(card.files.map(f => f.andonRow))].map(id => findRecord(call, tables.andon, id)));
+  const inAndon = rows.filter(Boolean).flatMap(r => filesIn(r.fields[card.from])).filter(f => want.has(fileKey(f)));
+  let now = await findRecord(call, tables.universe, card.rowId);
+  if (!now) throw new Error("That Universe row no longer exists. Refresh and try again.");
+  const todo = missingFiles(inAndon, now.fields[card.field]);
+  if (!todo.length) {
+    throw new AlreadyDone("The Universe already has these files.", "Someone added them meanwhile, or they're gone from ANDON. Nothing was written.");
+  }
+  for (let i = 0; i < todo.length; i++) {
+    const k = fileKey(todo[i]);
+    if (done[k]) continue;
+    const what = todo.length > 1 ? `Copying ${i + 1} of ${todo.length}` : "Copying";
+    onStatus(`${what}…`);
+    done[k] = await upload(await download(todo[i]), todo[i], (p) => onStatus(`${what} ${Math.round(p * 100)}%`));
+  }
+  onStatus("Pushing…");
+  // Uploads take a while: what the cell holds is read again just before it's written.
+  now = await findRecord(call, tables.universe, card.rowId);
+  if (!now) throw new Error("That Universe row no longer exists. Refresh and try again.");
+  const have = filesIn(now.fields[card.field]);
+  const adding = missingFiles(todo, now.fields[card.field]).map(f => ({ ...f, file_token: done[fileKey(f)] }));
+  if (!adding.length) throw new AlreadyDone("The Universe already has these files.", "Someone added them meanwhile. Nothing was written.");
+  const cell = [...have, ...adding].map(({ file_token, name, size, type }) => ({ file_token, name, size, type }));
+  const written = { [card.field]: cell.map(f => ({ file_token: f.file_token })) };
+  await updateRecord(call, tables.universe, card.rowId, written);
+  return { recordId: card.rowId, written, cell, copied: adding.map(f => f.name),
+           ...await readBack(call, tables.universe, card.rowId, written) };
 }
 
 /* The row editor: write the cells a person changed (`write`, Lark's write format)

@@ -3,17 +3,17 @@
 
 import { RULES, LARK } from "./config.js";
 import { TABLE_TITLES, pushBrief, pushPar, pushCollections, pushAndon, setIgnore, newClientToken, writableOnly, fillGaps,
-         saveEdit, findRecord, setTag, syncPm } from "./ops.js";
+         saveEdit, findRecord, setTag, syncPm, copyFiles } from "./ops.js";
 import {
   universeFromBrief, collectionsChange, stepStatus, parAfterAdding, defaultVat, vatMentions,
-  people, plain, pmWrites, andonFromBrief, auditPatch, auditMissing, auditFilesMissing, monthOf, clean, editChanges, editWrite,
+  people, plain, pmWrites, attachmentRequest, andonFromBrief, auditPatch, auditMissing, auditFilesMissing, monthOf, clean, editChanges, editWrite,
   tagsWith, tagsWithout, requiredMessage, FILTER_KEYS, NONE, passesFilters, filterChoices, closestMatches,
 } from "./sync.js";
 import { uploadSizeProblem } from "./errors.js";
 import { $, h, ic, toast, fmt, flash, copyable, store, collapse, busy, radioKeys, openMenu } from "./ui.js";
 import { copyableText, dateField } from "./polaris-ui.js";
 import { createRowDoc } from "./rowdoc.js";
-import { describe, isDeadToken, isUncertain, uploadToBase } from "./net.js";
+import { describe, isDeadToken, isUncertain, uploadToBase, downloadFromBase } from "./net.js";
 
 const NOUN = { universe: "briefs or PARs", brief: "briefs", par: "PARs", invoice: "invoices", andon: "briefs for ANDON", audit: "projects with blanks" };
 // The search box says what it looks through on each tab.
@@ -180,7 +180,7 @@ export function createInbox(ctx) {
   }
 
   // The kinds of push each tab's cards make (TABLES_FOR / neededBy in app.js and ops.js).
-  const TAB_KINDS = { universe: ["brief", "par"], invoice: ["invoice"], andon: ["andon", "approval"],
+  const TAB_KINDS = { universe: ["brief", "par", "files"], invoice: ["invoice"], andon: ["andon", "approval"],
                       audit: ["audit:universe", "audit:andon", "pm"] };
   const tabProblems = () => [...new Set([S.tab, ...(TAB_KINDS[S.tab] || [])].flatMap(k => ctx.problemsFor(k)))];
 
@@ -222,7 +222,8 @@ export function createInbox(ctx) {
   function matches(c, q) {
     if (!q) return true;
     const am = c.am ? c.am.map(u => u.name).join(" ") : "";
-    const extra = c.kind === "audit" ? `${c.target} ${c.gaps.join(" ")} ${c.tag || ""}` : "";
+    const extra = c.kind === "audit" ? `${c.target} ${c.gaps.join(" ")} ${c.tag || ""}`
+      : c.kind === "files" ? [...c.files, ...c.tooBig].map(f => f.name).join(" ") : "";
     return `${c.code} ${c.name} ${c.requestNo} ${c.status} ${am} ${extra}`.toLowerCase().includes(q.toLowerCase().trim());
   }
 
@@ -279,6 +280,7 @@ export function createInbox(ctx) {
     if (c.kind === "audit") return auditCardEl(c);
     if (c.kind === "approval") return approvalCardEl(c);
     if (c.kind === "pm") return pmCardEl(c);
+    if (c.kind === "files") return filesCardEl(c);
     const writable = ctx.canWriteFor(c.kind);
     const notes = [];
     let meta;
@@ -363,6 +365,27 @@ export function createInbox(ctx) {
       h("h3", null, c.name || "(no name)"),
       h("p", { class: "item-meta" }, "PAR ", copyable(c.requestNo, { label: "request number" }), ` · into ANDON's ${c.field}`),
       h("div", { class: "item-actions" }, mainButton("Push", "approval", () => openSheet(c))));
+  }
+
+  /* A Universe row whose project has files in ANDON that its Other Attachments
+     doesn't: Copy brings them over. Files too big for the connection service are
+     named, to upload in Lark (the button is off when only those are left). */
+  function filesCardEl(c) {
+    const n = c.files.length + c.tooBig.length;
+    const btn = c.files.length ? mainButton("Copy", "files", () => openSheet(c))
+      : h("span", { class: "btn-wrap", title: `Too big to copy here (over ${LARK.maxUploadMb} MB). Upload ${c.tooBig.length === 1 ? "it" : "them"} in Lark.` },
+          h("button", { type: "button", class: "btn btn-tonal", disabled: true }, "Copy"));
+    return h("article", { class: "card item" + (S.working.has(c.id) ? " is-working" : "") + (S.entering.has(c.id) ? " is-entering" : ""),
+                          "data-id": c.id },
+      h("div", { class: "item-head" },
+        copyable(c.code, { label: "project code", cls: "code" }),
+        c.status ? h("span", { class: `badge ${BADGE[c.status] || ""}` }, c.status) : null,
+        h("span", { class: "item-date" }, "")),
+      h("h3", null, c.name || "(no name)"),
+      h("p", { class: "item-meta" }, `${n} file${n === 1 ? "" : "s"} from ANDON's ${c.from} · into the Universe's ${c.field}`),
+      c.tooBig.length ? h("ul", { class: "notes" }, h("li", { class: "is-plain" },
+        `Too big to copy here: ${c.tooBig.map(f => f.name).join(", ")}. Upload ${c.tooBig.length === 1 ? "it" : "them"} in Lark.`)) : null,
+      h("div", { class: "item-actions" }, btn));
   }
 
   /* Where a Collections card lands: the row (“AR name”), then From → To. */
@@ -976,11 +999,13 @@ export function createInbox(ctx) {
     $("#sheetTitle").textContent = { brief: "Push to Universe", par: "Add PAR to Universe", invoice: "Add to Collections", andon: "Add to ANDON",
                                      audit: `Fill blanks in ${c.target === "andon" ? "ANDON" : "the Universe"}`,
                                      edit: `Changes to this ${EDIT_WHERE[c.table]} row`, view: TABLE_TITLES[c.table],
-                                     approval: "Add approval to ANDON", pm: "Set the PM in the Universe and ANDON" }[c.kind];
+                                     approval: "Add approval to ANDON", pm: "Set the PM in the Universe and ANDON",
+                                     files: "Copy ANDON files to the Universe" }[c.kind];
     $("#sheetSub").replaceChildren(copyable(c.code, { label: "project code", empty: "No code" }),
       ...((c.kind === "par" || c.kind === "invoice" || c.kind === "view" || c.kind === "approval") && c.requestNo ? [" · request ", copyable(c.requestNo, { label: "request number" })] : []), ` · ${c.name}`);
     go.querySelector(".label").textContent = { brief: "Push to Universe", par: "Add PAR", invoice: "Add to Collections", andon: "Add to ANDON", audit: "Fill",
-                                               edit: "Push changes", approval: "Add approval", pm: "Set PM" }[c.kind];
+                                               edit: "Push changes", approval: "Add approval", pm: "Set PM",
+                                               files: c.files && c.files.length === 1 ? "Copy file" : "Copy files" }[c.kind];
     $("#sheetError").hidden = true;
     const body = $("#sheetBody");
     body.replaceChildren();
@@ -995,6 +1020,7 @@ export function createInbox(ctx) {
     else if (c.kind === "audit") buildAudit(body, c);
     else if (c.kind === "approval") buildApproval(body, c);
     else if (c.kind === "pm") buildPm(body, c);
+    else if (c.kind === "files") buildFiles(body, c);
     else buildInvoice(body, c);
     placeDoc();
     if (c.kind !== "view") paintDoc();
@@ -1103,6 +1129,17 @@ export function createInbox(ctx) {
     sheet.refresh = paintDoc;
     put(body, c.link && c.link.link ? h("a", { class: "btn btn-sm view-open", href: c.link.link, target: "_blank", rel: "noopener" },
       `Open ${c.requestNo || "the approval"} in Lark`, ic("external")) : null);
+  }
+
+  /* --- ANDON files → the Universe: nothing to choose; each file downloads from ANDON. --- */
+  function buildFiles(body, c) {
+    sheet.refresh = paintDoc;
+    const kb = (n) => (n ? h("span", { class: "file-size" }, ` (${Math.max(1, Math.round(n / 1024)).toLocaleString()} KB)`) : null);
+    const item = (f) => h("li", null, h("button", { type: "button", class: "file-dl", title: `Download ${f.name}`,
+      onclick: (e) => ctx.downloadFile("andon", f, e.currentTarget) }, ic("download"), h("span", { class: "file-name" }, f.name, kb(f.size))));
+    put(body, fieldEl(`From ANDON's ${c.from}`, false, h("ul", { class: "files" }, c.files.map(item))),
+      c.tooBig.length ? h("p", { class: "note" }, `Not copied, too big for Polaris (over ${LARK.maxUploadMb} MB): ` +
+        `${c.tooBig.map(f => f.name).join(", ")}. Upload ${c.tooBig.length === 1 ? "it" : "them"} in Lark.`) : null);
   }
 
   function buildPar(body, c) {
@@ -1289,6 +1326,11 @@ export function createInbox(ctx) {
     if (c.kind === "approval") {
       return { ...base, verb: `Add PAR ${c.requestNo} to ANDON`, table: "andon", rowId: c.rowId, fields: { [c.field]: c.link } };
     }
+    if (c.kind === "files") {   // the cell as it'll be: what it has, then the copies (by name)
+      const n = c.files.length;
+      return { ...base, verb: `Copy ${n} file${n === 1 ? "" : "s"} from ANDON`, table: "universe", rowId: c.rowId,
+               fields: { [c.field]: [...c.have, ...c.files].map(f => ({ name: f.name })) } };
+    }
     if (c.kind === "pm") {   // the Universe row beside the sheet (ANDON gets the same)
       const p = (ch.pm || [])[0];
       if (p) names[p.id] = p.name;
@@ -1345,6 +1387,16 @@ export function createInbox(ctx) {
       payload = writes.universe;
       res = await syncPm(ctx.call, ctx.tables, rows, writes, (t) => ctx.fieldsOf(t));
       return { res, payload, extra: { pmName: p.name } };
+    }
+    if (c.kind === "files") {
+      // Downloaded from ANDON and uploaded to the Universe as you, through the
+      // connection service; the tokens stay in the job, so a retry doesn't upload twice.
+      ch.copied = ch.copied || {};
+      res = await copyFiles(ctx.call, ctx.tables, c, { done: ch.copied, onStatus,
+        download: (f) => downloadFromBase(attachmentRequest(f, ctx.tables.andon.table, LARK.api), ctx.token()),
+        upload: (blob, f, onProgress) => uploadToBase(new File([blob], f.name, { type: blob.type || f.type || "" }),
+          ctx.tables.universe, ctx.token(), { onProgress }) });
+      return { res, payload: res.written, extra };
     }
     if (c.kind === "approval") {
       // Only into a blank Approval: one someone filled meanwhile is left alone (AlreadyDone).

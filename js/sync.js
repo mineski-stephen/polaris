@@ -799,6 +799,54 @@ export function approvalCards(andon, pars, rules, { fields } = {}) {
   return { cards, hidden };
 }
 
+/* ======================= ANDON files → the Universe ======================= */
+
+/* The files in an attachment cell, as {file_token, name, size, type} (what download needs). */
+export const filesIn = (v) => (Array.isArray(v) ? v : []).filter(f => f && typeof f === "object" && f.file_token)
+  .map(f => ({ file_token: f.file_token, name: f.name || "file", size: Number(f.size) || 0, type: f.type || "" }));
+
+/* A file across Bases: a copy gets a new file_token, so it's known by name and size. */
+export const fileKey = (f) => `${clean(f.name).toLowerCase()}|${Number(f.size) || 0}`;
+
+/* The files of `from` (a list) that `cell` (an attachment cell) doesn't hold, once each. */
+export function missingFiles(from, cell) {
+  const seen = new Set(filesIn(cell).map(fileKey));
+  return from.filter(f => { const k = fileKey(f); return !seen.has(k) && seen.add(k); });
+}
+
+/* The Universe tab's file cards: a Universe row whose project has files in ANDON
+   (rules.andonFiles.from, in every ANDON row with its code) that its
+   rules.andonFiles.to doesn't have yet. One card per Universe row; each file keeps
+   the ANDON row it's in. Files over `maxMb` can't go through the connection service:
+   they're listed in card.tooBig (to upload in Lark) and not copied. A table without
+   its column (in `fields`) gives no cards. Newest project codes first. */
+export function fileCards(universe, andon, rules, { fields = {}, maxMb = 0 } = {}) {
+  const cfg = rules.andonFiles;
+  const has = (table, col) => !fields[table] || fields[table].some(f => f.field_name === col);
+  if (!cfg || !has("universe", cfg.to) || !has("andon", cfg.from)) return { cards: [] };
+  const byCode = new Map();
+  for (const r of andon || []) {
+    const code = normCode(plain((r.fields || {})["Project Code"]));
+    const files = filesIn((r.fields || {})[cfg.from]).map(f => ({ ...f, andonRow: r.record_id }));
+    if (code && files.length) byCode.set(code, [...(byCode.get(code) || []), ...files]);
+  }
+  const cards = [];
+  for (const row of universe || []) {
+    const f = row.fields || {};
+    const code = normCode(plain(f["Project Code"]));
+    const missing = code && byCode.has(code) ? missingFiles(byCode.get(code), f[cfg.to]) : [];
+    if (!missing.length) continue;
+    const big = (x) => maxMb > 0 && x.size > maxMb * 1024 * 1024;
+    cards.push({
+      kind: "files", id: `files:${row.record_id}`, rowId: row.record_id, code, field: cfg.to, from: cfg.from,
+      name: clean(f["Project"]), status: clean(f["Status"]), submittedAt: null,
+      files: missing.filter(x => !big(x)), tooBig: missing.filter(big), have: filesIn(f[cfg.to]), notes: [], blocked: "",
+    });
+  }
+  cards.sort((a, b) => b.code.localeCompare(a.code));
+  return { cards };
+}
+
 export function auditCards(target, records, briefs, rules, { hide = new Set(), options, fields, byCode, tags = [], tagField } = {}) {
   const briefFor = byCode || briefsByCode(briefs, rules);
   const cards = [], tagged = [], hidden = { noBrief: 0, hidden: 0 };

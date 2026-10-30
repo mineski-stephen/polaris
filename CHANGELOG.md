@@ -9,6 +9,13 @@ or links stop working), add an entry here with the same number and the date,
 and say what changed in the team's words. `npm run check:shell` fails if the
 two numbers differ.
 
+## 1.10.0 · Oct 30, 2026
+
+- **New:** the Universe tab shows projects whose ANDON **Attachment** has files
+  the Universe's **Other Attachments** doesn't. **Copy** brings them over (added
+  beside what's there, nothing replaced). A file counts as there when one with the
+  same name and size is. Files over 10 MB are named on the card, to upload in Lark.
+
 ## 1.9.4 · Oct 29, 2026
 
 - **Changed:** a people picker's list stays closed when the push form opens. It
