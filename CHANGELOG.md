@@ -9,6 +9,11 @@ or links stop working), add an entry here with the same number and the date,
 and say what changed in the team's words. `npm run check:shell` fails if the
 two numbers differ.
 
+## 1.10.2 · Oct 30, 2026
+
+- **Fixed:** a long status badge on a card no longer pushes the date onto its own
+  line. The badge ends in "…" instead.
+
 ## 1.10.1 · Oct 30, 2026
 
 - **Changed:** files can be up to **20 MB** each (was 10 MB), the most Lark takes in
