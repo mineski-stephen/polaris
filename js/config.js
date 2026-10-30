@@ -122,11 +122,12 @@ export const RULES = {
   // PAR's Request No. (its number, linking to the approval) in `field`, a link
   // column, while it's blank: one card per row, pushed like a PAR to the Universe.
   andonApproval: { field: "Approval" },
-  // Universe tab: a project's files on its Project Brief (`from`, every brief with its
-  // code that wasn't voided) that its Universe row's `to` doesn't have yet (matched by
-  // name and size: a copy gets a new file_token) get a card, whose Copy downloads them
-  // from the brief and uploads them to the Universe, beside what's already there.
-  briefFiles: { from: "Attachments", to: "Other Attachments" },
+  // Universe tab: a Universe row whose `to` (an attachment column) is blank, and whose
+  // Project Brief links to its files in Lark Approval (`link`, a URL column; Polaris
+  // can't read Lark Approval itself), gets a card: the person opens the link,
+  // downloads the files, and uploads them through Polaris. Every status counts; to
+  // leave some out, list them in `skipStatuses` (e.g. ["Stalled", "Lost", "Archived"]).
+  briefFiles: { link: "Attachment (Project Brief, Pitch Deck)", to: "Other Attachments", skipStatuses: [] },
   // The audit: a project's PM must be the same in the Universe (`universe`) and in
   // its ANDON row(s) (`andon`). If they differ or either is blank, it gets an Audit
   // card whose Fill sets one PM in both; the Fill is refused while it's blank.

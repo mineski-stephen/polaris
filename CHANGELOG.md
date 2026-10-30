@@ -11,10 +11,9 @@ two numbers differ.
 
 ## 1.10.0 · Oct 30, 2026
 
-- **New:** the Universe tab shows projects whose Project Brief **Attachments** has
-  files the Universe's **Other Attachments** doesn't. **Copy** brings them over (added
-  beside what's there, nothing replaced). A file counts as there when one with the
-  same name and size is. Files over 10 MB are named on the card, to upload in Lark.
+- **New:** the Universe tab shows projects whose **Other Attachments** is blank and
+  whose Project Brief has files. The card links to the files in Lark Approval: download
+  them, then **Upload** them through Polaris (up to 10 MB each).
 
 ## 1.9.4 · Oct 29, 2026
 

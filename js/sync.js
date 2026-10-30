@@ -801,50 +801,42 @@ export function approvalCards(andon, pars, rules, { fields } = {}) {
 
 /* ======================= the brief's files → the Universe ======================= */
 
-/* The files in an attachment cell, as {file_token, name, size, type} (what download needs). */
-export const filesIn = (v) => (Array.isArray(v) ? v : []).filter(f => f && typeof f === "object" && f.file_token)
-  .map(f => ({ file_token: f.file_token, name: f.name || "file", size: Number(f.size) || 0, type: f.type || "" }));
-
-/* A file across Bases: a copy gets a new file_token, so it's known by name and size. */
-export const fileKey = (f) => `${clean(f.name).toLowerCase()}|${Number(f.size) || 0}`;
-
-/* The files of `from` (a list) that `cell` (an attachment cell) doesn't hold, once each. */
-export function missingFiles(from, cell) {
-  const seen = new Set(filesIn(cell).map(fileKey));
-  return from.filter(f => { const k = fileKey(f); return !seen.has(k) && seen.add(k); });
-}
-
-/* The Universe tab's file cards: a Universe row whose project has files on its
-   Project Brief (rules.briefFiles.from, on every brief with its code that wasn't
-   voided) that its rules.briefFiles.to doesn't have yet. One card per Universe row;
-   each file keeps the brief it's on (sourceRow). Files over `maxMb` can't go through the connection service:
-   they're listed in card.tooBig (to upload in Lark) and not copied. A table without
-   its column (in `fields`) gives no cards. Newest project codes first. */
-export function fileCards(universe, briefs, rules, { fields = {}, maxMb = 0 } = {}) {
+/* The Universe tab's file cards: a Universe row whose rules.briefFiles.to (an
+   attachment column) is blank, and whose project's Project Brief links to its files
+   in Lark Approval (rules.briefFiles.link, on the newest brief with the code that
+   wasn't voided). Polaris can't read Lark Approval, so the card links there: the
+   person downloads the files and uploads them through Polaris. No card for a row
+   whose Status is in rules.briefFiles.skipStatuses, nor when either table lacks its
+   column (in `fields`). Newest brief first. */
+export function fileCards(universe, briefs, rules, { fields = {} } = {}) {
   const cfg = rules.briefFiles;
   const has = (table, col) => !fields[table] || fields[table].some(f => f.field_name === col);
-  if (!cfg || !has("universe", cfg.to) || !has("brief", cfg.from)) return { cards: [] };
-  const byCode = new Map();
+  if (!cfg || !has("universe", cfg.to) || !has("brief", cfg.link)) return { cards: [] };
+  const best = new Map();
   for (const r of briefs || []) {
-    if (rules.voidStatuses.includes(clean((r.fields || {})["Status"]))) continue;
-    const code = normCode(plain((r.fields || {})["Project Code"]));
-    const files = filesIn((r.fields || {})[cfg.from]).map(f => ({ ...f, sourceRow: r.record_id }));
-    if (code && files.length) byCode.set(code, [...(byCode.get(code) || []), ...files]);
+    const f = r.fields || {};
+    const code = normCode(plain(f["Project Code"]));
+    const v = f[cfg.link];
+    const link = v && typeof v.link === "string" && /^https:\/\//.test(v.link) ? v.link : "";
+    if (!code || !link || rules.voidStatuses.includes(clean(f["Status"]))) continue;
+    const at = num(f["Submitted at"]) || 0;
+    if (best.has(code) && best.get(code).submittedAt >= at) continue;
+    best.set(code, { link, label: clean(v.text), submittedAt: at, requestNo: requestNo(f["Request No."]), name: clean(f["Project Name"]) });
   }
   const cards = [];
   for (const row of universe || []) {
     const f = row.fields || {};
     const code = normCode(plain(f["Project Code"]));
-    const missing = code && byCode.has(code) ? missingFiles(byCode.get(code), f[cfg.to]) : [];
-    if (!missing.length) continue;
-    const big = (x) => maxMb > 0 && x.size > maxMb * 1024 * 1024;
+    const b = code && best.get(code);
+    const status = clean(f["Status"]);
+    if (!b || !isBlank(f[cfg.to]) || (cfg.skipStatuses || []).includes(status)) continue;
     cards.push({
-      kind: "files", id: `files:${row.record_id}`, rowId: row.record_id, code, field: cfg.to, from: cfg.from,
-      name: clean(f["Project"]), status: clean(f["Status"]), submittedAt: null,
-      files: missing.filter(x => !big(x)), tooBig: missing.filter(big), have: filesIn(f[cfg.to]), notes: [], blocked: "",
+      kind: "files", id: `files:${row.record_id}`, rowId: row.record_id, code, field: cfg.to,
+      name: clean(f["Project"]) || b.name, status, link: b.link, label: b.label, requestNo: b.requestNo,
+      submittedAt: b.submittedAt || null, notes: [], blocked: "",
     });
   }
-  cards.sort((a, b) => b.code.localeCompare(a.code));
+  cards.sort(bySubmittedDesc);
   return { cards };
 }
 

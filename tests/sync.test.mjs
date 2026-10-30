@@ -9,7 +9,7 @@ import {
   indexUniverse, indexCollections, briefCards, parCards, collectionCards, collectionsChange,
   universeFromBrief, verifyWritten, similarity, vatMentions,
   peoplePool, universeView, shortName, andonFromBrief, collectionsView, collectionRow, invoiceDetailsPatch,
-  auditCards, auditPatch, parseDay, fillPlan, invoiceChangedSince, draftsToJSON, draftsFromJSON, queueToJSON, queueFromJSON, cellText, parApprovals, approvalCards, pmCards, fileCards, missingFiles, attachmentRequest, attachmentLinkRequest, attachmentLink, isWonProject, auditMissing, monthOf,
+  auditCards, auditPatch, parseDay, fillPlan, invoiceChangedSince, draftsToJSON, draftsFromJSON, queueToJSON, queueFromJSON, cellText, parApprovals, approvalCards, pmCards, fileCards, attachmentRequest, attachmentLinkRequest, attachmentLink, isWonProject, auditMissing, monthOf,
   needsSignedCe, auditFilesMissing, isBlank,
   matchesQuery, andonView, canEditField, editChanges, editWrite, editCheck, editKey, writeValueOf,
   tagsOf, tagsWith, tagsWithout, variableColumns, customTagsFrom, customTagOf, tagGroups,
@@ -1225,34 +1225,36 @@ test("PM audit: a project whose PM differs between the Universe and ANDON, or is
   assert.equal(pmCards(uni, andon, RULES, { fields: { universe: [{ field_name: "Project" }] } }).cards.length, 0);
 });
 
-test("brief files: a Universe row gets a card for the files its Other Attachments lacks", () => {
+test("brief files: a blank Other Attachments gets a card linking to the brief's files in Lark Approval", () => {
   const seg = (text) => [{ type: "text", text }];
-  const file = (tok, name, size) => ({ file_token: tok, name, size, type: "application/pdf" });
-  const MB = 1024 * 1024;
+  const link = (n) => ({ link: `https://www.larksuite.com/approval/admin/previewAttachment?key=K${n}`, text: `${n} attachment(s)`, type: "url" });
+  const L = "Attachment (Project Brief, Pitch Deck)";
   const briefs = [
-    { record_id: "a1", fields: { "Project Code": seg("2026TEG-P0001"), "Status": "Approved", "Attachments": [file("bA", "brief.pdf", 100), file("bB", "deck.pdf", 200)] } },
-    { record_id: "a2", fields: { "Project Code": seg("2026teg-p0001"), "Status": "Approved", "Attachments": [file("bC", "brief.pdf", 100), file("bD", "video.mp4", 40 * MB)] } },
-    { record_id: "a3", fields: { "Project Code": seg("2026TEG-P0002"), "Status": "Approved", "Attachments": [file("bE", "plan.pdf", 5)] } },
-    // a withdrawn brief's files aren't copied
-    { record_id: "a4", fields: { "Project Code": seg("2026TEG-P0003"), "Status": "Recalled", "Attachments": [file("bF", "old.pdf", 9)] } },
+    { record_id: "b1", fields: { "Project Code": seg("2026TEG-P0001"), "Status": "Approved", "Submitted at": 100, [L]: link(1) } },
+    { record_id: "b2", fields: { "Project Code": seg("2026teg-p0001"), "Status": "Approved", "Submitted at": 200, [L]: link(2) } },   // newer: this one
+    { record_id: "b3", fields: { "Project Code": seg("2026TEG-P0002"), "Status": "Approved", "Submitted at": 300, [L]: link(3) } },
+    { record_id: "b4", fields: { "Project Code": seg("2026TEG-P0003"), "Status": "Recalled", "Submitted at": 400, [L]: link(4) } },   // voided
+    { record_id: "b5", fields: { "Project Code": seg("2026TEG-P0004"), "Status": "Approved", "Submitted at": 500 } },                 // no link
+    { record_id: "b6", fields: { "Project Code": seg("2026TEG-P0005"), "Status": "Approved", "Submitted at": 600, [L]: link(6) } },
   ];
   const universe = [
-    // has brief.pdf already (another token: a copy), so only deck.pdf and the video are missing
-    { record_id: "u1", fields: { "Project Code": seg("2026TEG-P0001"), "Project": seg("Summer Cup"), "Other Attachments": [file("uX", "Brief.pdf", 100)] } },
-    { record_id: "u2", fields: { "Project Code": seg("2026TEG-P0002"), "Other Attachments": [file("uY", "plan.pdf", 5)] } },   // has it all
-    { record_id: "u3", fields: { "Project Code": seg("2026TEG-P0003") } },   // only a recalled brief
+    { record_id: "u1", fields: { "Project Code": seg("2026TEG-P0001"), "Project": seg("Summer Cup"), "Status": "Signed CE" } },
+    { record_id: "u2", fields: { "Project Code": seg("2026TEG-P0002"), "Other Attachments": [{ file_token: "x", name: "a.pdf", size: 1 }] } },   // has files
+    { record_id: "u3", fields: { "Project Code": seg("2026TEG-P0003") } },
+    { record_id: "u4", fields: { "Project Code": seg("2026TEG-P0004") } },
+    { record_id: "u5", fields: { "Project Code": seg("2026TEG-P0005"), "Status": "Lost", "Other Attachments": [] } },   // lost projects count too
   ];
-  const { cards } = fileCards(universe, briefs, RULES, { maxMb: 10 });
-  assert.equal(cards.length, 1);
-  const c = cards[0];
+  const { cards } = fileCards(universe, briefs, RULES);
+  assert.deepEqual(cards.map(c => c.rowId), ["u5", "u1"]);
+  // …unless their status is left out
+  const skip = { ...RULES, briefFiles: { ...RULES.briefFiles, skipStatuses: ["Lost"] } };
+  assert.deepEqual(fileCards(universe, briefs, skip).cards.map(c => c.rowId), ["u1"]);
+  const c = cards[1];
   assert.equal(c.kind, "files");
-  assert.equal(c.rowId, "u1");
-  assert.deepEqual(c.files.map(f => [f.name, f.sourceRow]), [["deck.pdf", "a1"]]);
-  assert.deepEqual(c.tooBig.map(f => f.name), ["video.mp4"]);
-  assert.deepEqual(c.have.map(f => f.file_token), ["uX"]);
-  // the same file on two briefs is copied once
-  assert.deepEqual(missingFiles([file("1", "a.pdf", 1), file("2", "a.pdf", 1), file("3", "a.pdf", 2)], []).map(f => f.file_token), ["1", "3"]);
+  assert.equal(c.link, link(2).link);
+  assert.equal(c.label, "2 attachment(s)");
+  assert.equal(c.field, "Other Attachments");
   // a table without its column gives no cards
-  const fields = { universe: [{ field_name: "Project Code" }], brief: [{ field_name: "Attachments" }] };
+  const fields = { universe: [{ field_name: "Project Code" }], brief: [{ field_name: L }] };
   assert.equal(fileCards(universe, briefs, RULES, { fields }).cards.length, 0);
 });

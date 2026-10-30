@@ -99,7 +99,7 @@ const TABLES_FOR = {
   universe: ["brief", "par", "universe"],   // the Universe tab: briefs and PARs
   approval: ["par", "andon"],   // a PAR's Request No. into ANDON's Approval
   pm: ["universe", "andon"],    // one PM in both
-  files: ["brief", "universe"], // the brief's files into the Universe's Other Attachments
+  files: ["brief", "universe"], // the brief's files, uploaded by hand, into the Universe's Other Attachments
   // The audit fills Universe or ANDON cells from the brief: each card checks its own table.
   audit: ["brief", "universe"], "audit:universe": ["brief", "universe"], "audit:andon": ["brief", "andon"],
   // The row editor writes to the one table the row is in.
@@ -442,9 +442,8 @@ function recompute() {
     S.lists.andon.cards = [...S.lists.andon.cards, ...approvals.cards].sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0));
     S.pmPool = pmPool(d.andon, d.universe);
   }
-  // …and the Universe tab's projects whose brief has files the Universe doesn't (last).
-  const files = fileCards(d.universe, d.brief, RULES,
-    { fields: { universe: fieldsOf("universe"), brief: fieldsOf("brief") }, maxMb: LARK.maxUploadMb });
+  // …and the Universe tab's projects with a blank Other Attachments whose brief has files (last).
+  const files = fileCards(d.universe, d.brief, RULES, { fields: { universe: fieldsOf("universe"), brief: fieldsOf("brief") } });
   S.lists.universe.cards = [...S.lists.universe.cards, ...files.cards];
   // The audit: Universe and ANDON cells left blank that the brief can fill.
   const byCode = briefsByCode(d.brief, RULES);
@@ -500,18 +499,18 @@ function afterPush(c, res, payload, extra = {}) {
     }
     return { title, dest: "universe", warn: false, detail: "" };
   }
-  if (c.kind === "files") {             // the brief's files went into the Universe row
+  if (c.kind === "files") {             // the brief's files, uploaded into the Universe row
     const rec = (d.universe || []).find(r => r.record_id === res.recordId);
-    if (rec) rec.fields[c.field] = res.cell;
+    if (rec) rec.fields[c.field] = extra.cell;
     recompute();
     render();
-    const n = res.copied.length;
-    const title = `Copied ${n} file${n === 1 ? "" : "s"} from the brief to the Universe for ${c.code}.`;
+    const n = extra.cell.length;
+    const title = `Uploaded ${n} file${n === 1 ? "" : "s"} to ${c.code}'s ${c.field}.`;
     if (res.readBackError || (res.mismatches && res.mismatches.length)) {
       const detail = res.mismatches && res.mismatches.length ? `Lark's ${c.field} doesn't list every file sent.` : describe(res.readBackError);
       return { title, dest: "universe", warn: true, detail: `Check ${c.field} in Lark: ${detail}` };
     }
-    return { title, dest: "universe", warn: false, detail: res.copied.join(", ") };
+    return { title, dest: "universe", warn: false, detail: extra.cell.map(f => f.name).join(", ") };
   }
   if (c.kind === "approval") {          // a PAR's Request No. went into ANDON's Approval
     const rec = (d.andon || []).find(r => r.record_id === res.recordId);

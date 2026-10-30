@@ -15,7 +15,7 @@ phone and on a PC, and every change is made as you, with your own Lark login.
 | **Invoice Request** (by Account Managers) | moves its Collections row along: **Pending Invoice Request Approval** when filed, **For Collection** when approved |
 | **Project Brief** (any department) | a new **ANDON** row (Project Management's board) |
 | **Project Approval (PAR)** | its Request No. in the **Approval** column of the project's ANDON row |
-| **Project Brief** files (its **Attachments**) | copies in the project's Universe **Other Attachments** |
+| **Project Brief** files (linked in Lark Approval) | uploaded by you into the project's Universe **Other Attachments** |
 
 > **Connected to the live tables.** `APP.env` in `js/config.js` is `"live"`, so the
 > header shows no *Test copy* badge and every push changes real data. See
@@ -284,18 +284,19 @@ if ANDON has no column by that name, there are no cards.
 
 ### The brief's files → the Universe
 
-On the **Universe** tab, after the briefs and PARs: every Universe row whose project
-has files in its Project Brief's **Attachments** (on any brief with its Project Code
-that wasn't recalled, rejected or cancelled) that its **Other Attachments** doesn't
-have yet gets a card (*2 files on the brief's Attachments · into the Universe's Other
-Attachments*). A file counts as there when one with the same name and size is, since a
-copy gets a new file token. **Copy** downloads each file from the brief and uploads it
-to the Universe, as you, then adds them after what Other Attachments already holds
-(nothing there is removed or replaced). Both rows are read
-again first, so a file someone added meanwhile isn't copied twice. A file over 10 MB
-can't go through the connection service: the card names it, to upload in Lark. The
-columns are `briefFiles` in [`js/config.js`](js/config.js); if either table has no
-column by that name, there are no cards.
+The brief's files live in Lark Approval: its **Attachment (Project Brief, Pitch Deck)**
+column is a link to them there (*1 attachment(s)*), and Polaris's login can't read Lark
+Approval. So the files go across by hand. On the **Universe** tab, after the briefs and
+PARs: every Universe row whose **Other Attachments** is blank and whose project's brief
+has that link (the newest brief with its Project Code that wasn't recalled, rejected or
+cancelled) gets a card, newest brief first, whatever the project's Status.
+
+The card's link opens the files in Lark Approval: download them, then **Upload** and add
+them (up to 10 MB each). The push uploads them to the Universe as you and puts them in
+Other Attachments, only while it's still blank: if someone filled it meanwhile, theirs
+stays and the queue says so. The columns (and any statuses to leave out) are `briefFiles` in
+[`js/config.js`](js/config.js); if either table has no column by that name, there are
+no cards.
 
 ### Collections changes
 
@@ -757,10 +758,10 @@ the live tables.
 
 ## Known limits
 
-- **Attachments.** Files over 10 MB don't fit through the connection service, so
-  the Universe tab's file cards leave them for you to upload in Lark (see *The
-  brief's files → the Universe*). Add links by hand
-  under *Add other links* if needed.
+- **Attachments.** The brief's files live in Lark Approval, which this app has no
+  permission to read, so they're downloaded and uploaded by hand (see *The brief's
+  files → the Universe*). Files over 10 MB don't fit through the connection service:
+  upload those in Lark.
 - **Client** isn't on the Project Brief, so it's typed in the sheet (or left for later).
 - **Old PARs and invoices.** Nothing in those tables is marked IGNORE yet, so older
   ones for projects in the Universe show up once. Push or ignore them. Approved
