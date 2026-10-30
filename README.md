@@ -292,7 +292,7 @@ has that link (the newest brief with its Project Code that wasn't recalled, reje
 cancelled) gets a card, newest brief first, whatever the project's Status.
 
 The card's link opens the files in Lark Approval: download them, then **Upload** and add
-them (up to 10 MB each). The push uploads them to the Universe as you and puts them in
+them (up to 20 MB each). The push uploads them to the Universe as you and puts them in
 Other Attachments, only while it's still blank: if someone filled it meanwhile, theirs
 stays and the queue says so. The columns (and any statuses to leave out) are `briefFiles` in
 [`js/config.js`](js/config.js); if either table has no column by that name, there are
@@ -369,7 +369,7 @@ queue says which. The columns are `pmSync` in [`js/config.js`](js/config.js).
 Status is *Fully Closed*, *For Closing*, *For Collection* or *Signed CE* gets a card
 when its **Signed CE (PDF)** attachment is blank, even without a brief (*Won - Awaiting
 CE Signature* isn't asked: nothing is signed yet). In the Fill sheet, **Add the signed
-CE** picks the file (PDF, up to 10 MB each; add several if the CE is in parts). The
+CE** picks the file (PDF, up to 20 MB each; add several if the CE is in parts). The
 files upload to Lark (as you, through the connection service, like invoice files)
 when the push runs, before anything is written, so a failed upload writes nothing and
 **Retry** in the queue doesn't upload a file twice. The Fill is refused while the row
@@ -487,7 +487,7 @@ column (not only the ones the table shows), and every typed one can be changed:
 | Date | the date field (see *Dates* below); it sets the day, at midnight Manila |
 | Person | pick from everyone Polaris knows (the row's own people first) |
 | Checkbox, URL | a tick box, an address |
-| Attachment | the files it has (click one to download it; × takes it out) and **Add files** (up to 10 MB each) |
+| Attachment | the files it has (click one to download it; × takes it out) and **Add files** (up to 20 MB each) |
 
 **Files download from any row Polaris shows** (beside a push sheet, in the row editor,
 or a source table's record): click the file. It comes through the connection service,
@@ -523,7 +523,7 @@ are filled in by hand. If the invoice is already issued, add them when you **Pus
 (*Add invoice details* in the sheet; files upload before the row is created, so a
 failed upload writes nothing). Otherwise add them later with the **+** (or the
 pencil, to edit) on the Collections row: the sheet saves only what you changed, uploads files
-first (PDF or image, up to 10 MB each, the most the connection service takes),
+first (PDF or image, up to 20 MB each, the most Lark takes in one upload),
 then reads the row back to confirm. Clearing a field empties it in Lark.
 
 **Dates.** Every date field takes a typed date (*Oct 14, 2026*, *2026-10-14*,
@@ -760,8 +760,8 @@ the live tables.
 
 - **Attachments.** The brief's files live in Lark Approval, which this app has no
   permission to read, so they're downloaded and uploaded by hand (see *The brief's
-  files → the Universe*). Files over 10 MB don't fit through the connection service:
-  upload those in Lark.
+  files → the Universe*). Lark takes files up to 20 MB through
+  this app: upload bigger ones in Lark.
 - **Client** isn't on the Project Brief, so it's typed in the sheet (or left for later).
 - **Old PARs and invoices.** Nothing in those tables is marked IGNORE yet, so older
   ones for projects in the Universe show up once. Push or ignore them. Approved
@@ -828,7 +828,7 @@ the live tables.
 | An ANDON audit card has a plain **Hide**, no menu | That's on purpose: custom tags are Universe-only (`tags.tables` in `js/config.js`). |
 | *Polaris couldn't find the custom tags in the Variables table.* (Settings) | The Variables table needs a column with `custom_tag` in it and a value column (ideally named **Variable** and **Value**). |
 | *Add the file for Signed CE (PDF)…* (Fill) | Use **Add the signed CE** to pick the PDF, or untick **Signed CE (PDF)** to fill the card's other blanks without it. |
-| *"…" is over 10 MB* (Fill) | Compress the PDF (or split it into parts and add each one), then add it again. |
+| *"…" is over 20 MB* (Fill) | Compress the PDF (or split it into parts and add each one), then add it again. |
 | *Someone had already filled …, so those were left as they were.* (after Fill) | The audit only fills blank cells; those weren't blank any more. |
 | Red **Overridden** badge in the top bar | This browser is using another connection service address (Settings > Advanced, or a `?lark=` link). Clear it there, or open the page with `?reset`. |
 | Red *Preview mode* badge | `?preview` is on: the data is a snapshot and nothing is sent to Lark. Open Polaris without `?preview`. |

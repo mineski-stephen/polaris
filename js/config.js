@@ -9,7 +9,7 @@
 
 /* version: bump it with every release and add an entry to CHANGELOG.md (newest first, same number).
    The top bar shows it beside the name, so people can see at a glance which version they're running. */
-export const APP = { name: "Polaris", key: "polaris", version: "1.10.0", env: "live" };   // env: "live" | "test"
+export const APP = { name: "Polaris", key: "polaris", version: "1.10.1", env: "live" };   // env: "live" | "test"
 export const ENV_LABEL = APP.env === "test" ? "Test copy" : "";         // shown in the header, never a gate
 
 /* The connection service: the shared Lark proxy (Render). `service` is the name its
@@ -23,7 +23,7 @@ export const LARK = {
   scopes: "bitable:app",
   api: "https://open.larksuite.com/open-apis",
   authorize: "https://accounts.larksuite.com/open-apis/authen/v1/authorize",
-  maxUploadMb: 10,       // must match the Lark proxy's MAX_BODY_BYTES
+  maxUploadMb: 20,       // Lark's upload_all takes up to 20 MiB; the proxy's MAX_BODY_BYTES must be above it
 };
 
 /* One Lark link per table, exactly as copied from the address bar. */

@@ -1265,7 +1265,7 @@ export function createInbox(ctx) {
         fieldEl("Invoice Date", true, date, "sheetInvDate"),
         h("div", { class: "field" }, h("span", { class: "field-label" }, "Invoice", h("em", null, " (optional)")), list,
           h("label", { class: "btn btn-sm file-btn" }, ic("plus"), "Add a file", input),
-          h("p", { class: "set-sub" }, "PDF or image, up to 10 MB.")));
+          h("p", { class: "set-sub" }, `PDF or image, up to ${LARK.maxUploadMb} MB.`)));
       details.style.gap = "12px";
     };
     if (ch.showDetails || ch.invoiceNo || ch.files.length) showDetails();
