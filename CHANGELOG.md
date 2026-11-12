@@ -9,6 +9,14 @@ or links stop working), add an entry here with the same number and the date,
 and say what changed in the team's words. `npm run check:shell` fails if the
 two numbers differ.
 
+## 1.14.2 · Nov 12, 2026
+
+- Shared design fixes from the design language, found while reworking Appraisal:
+  - a side panel taller than the window now scrolls by itself (before, its end could only be reached at the bottom of the page);
+  - on phones, a top bar with two or more nav links hides the name and the session pill a little sooner, so the avatar stays on screen;
+  - "Clear local data" in Settings is an outlined button (as a borderless one its label sat indented from the text above it);
+  - `npm run check:shell` now fails if an id is used twice in `index.html`.
+
 ## 1.14.1 · Nov 10, 2026
 
 - **Changed:** in the Files page's zip, Collections invoices are named

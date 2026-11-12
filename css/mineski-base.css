@@ -45,6 +45,7 @@
   --gutter: 16px;
   --topbar: 60px;
   --maxw: 1200px;
+  --maxw-doc: 1480px;   /* a document view's own main (see .view.wide) */
   --tabs-h: 50px;          /* height of the sticky .tabs strip; offset sticky things below it with this */          /* page width of the top bar and every view; never overridden per tool (a side-by-side workspace widens only its own main) */
 
   --toast-err-bg: #3B1619;
@@ -174,6 +175,8 @@ kbd { font: 600 .78em inherit; padding: 1px 6px; border: 1px solid var(--line-2)
 main { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--gutter) 96px; outline: none; }
 .view { display: none; }
 .view.active { display: block; animation: rise .4s var(--ease) backwards; }   /* no lasting transform: it would trap position:fixed children */
+/* a view that shows a wide document may pass --maxw; the top bar stays at --maxw */
+main:has(> .view.wide.active) { max-width: var(--maxw-doc); }
 .narrow { max-width: 720px; margin-left: auto; margin-right: auto; }
 .mid { max-width: 820px; margin-left: auto; margin-right: auto; }
 
@@ -186,11 +189,14 @@ main { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--gutter) 96px; ou
 .back { display: inline-flex; align-items: center; gap: 6px; width: fit-content; padding: 7px 12px 7px 9px; border-radius: var(--r-pill);
         text-decoration: none; font-weight: 700; font-size: 14px; color: var(--muted); transition: background .2s, color .2s; }
 .back:hover { background: var(--surface); color: var(--ink); }
+button.back { border: 0; background: none; }   /* Back is a link; if it must be a button, it still looks like one */
 .subhead { font-size: 11.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .stack { display: grid; gap: 14px; }
 .split { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 28px; align-items: start; }
-.split > aside { position: sticky; top: calc(var(--topbar) + 16px); display: grid; gap: 14px; }
+/* the side panel scrolls by itself when it is taller than the window: a sticky column can't be reached otherwise */
+.split > aside { position: sticky; top: calc(var(--topbar) + 16px); display: grid; gap: 14px; align-content: start;
+                 max-height: calc(100dvh - var(--topbar) - 32px); overflow-y: auto; scrollbar-width: thin; padding: 4px; margin: -4px; }
 
 /* ---- buttons --------------------------------------------------------------- */
 .btn {
@@ -391,6 +397,10 @@ a.callout:hover .go .i { transform: translateX(3px); }
 /* page-level banners (ad blocker, setup needed, resume a draft) sit at the top of <main> */
 .banner { max-width: 820px; margin: 14px auto; animation: rise .4s var(--ease) both; }
 
+/* plain label / figure pairs (totals beside a document, a side panel's numbers) */
+.kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 12px; margin: 0; align-items: baseline; }
+.kv dt { font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.kv dd { margin: 0; text-align: right; font-size: 13.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
 /* key/value summary (confirm dialogs, record details) */
 .summary-list { display: grid; grid-template-columns: minmax(76px, max-content) 1fr; gap: 8px 14px; margin: 0; padding: 14px 16px;
                 border-radius: var(--r); background: var(--surface-2); border: 1px solid var(--line); }
@@ -603,6 +613,14 @@ a.callout:hover .go .i { transform: translateX(3px); }
 .ctx-menu .danger, .ctx-menu .danger .i { color: var(--danger); }
 .ctx-menu .danger:hover, .ctx-menu .danger:focus-visible { background: var(--danger-soft); }
 .ctx-menu hr { border: 0; border-top: 1px solid var(--line); margin: 5px 4px; }
+/* a card (or any block) that opens and closes: <details class="card card-pad disclosure"><summary class="subhead">…</summary> */
+.disclosure > summary { list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.disclosure > summary::-webkit-details-marker { display: none; }
+.disclosure > summary::after { content: ""; flex: none; width: 7px; height: 7px; margin-right: 3px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor;
+                               transform: rotate(45deg) translateY(-2px); transition: transform var(--t) var(--ease); }
+.disclosure[open] > summary::after { transform: rotate(-135deg) translateY(-2px); }
+.disclosure > summary:hover { color: var(--ink); }
+.disclosure[open] > summary { margin-bottom: 10px; }
 .more { padding: 6px; }
 .more > summary { list-style: none; cursor: pointer; padding: 8px 10px; border-radius: var(--r-sm); font-size: 13.5px; font-weight: 700; color: var(--muted);
                   display: flex; justify-content: space-between; align-items: center; }
@@ -729,7 +747,7 @@ dialog .toasts { top: calc(14px + env(safe-area-inset-top)); bottom: auto; }   /
 /* ---- responsive ------------------------------------------------------------------------------------------ */
 @media (max-width: 1024px) {
   .split { grid-template-columns: minmax(0, 1fr); }
-  .split > aside { position: static; }
+  .split > aside { position: static; max-height: none; overflow: visible; }
 }
 @media (max-width: 640px), (hover: none) {
   /* 16 px keeps iOS from zooming into a focused field */
@@ -757,6 +775,8 @@ dialog .toasts { top: calc(14px + env(safe-area-inset-top)); bottom: auto; }   /
 }
 @media (max-width: 560px) {
   .tab { padding: 0 10px; }
+  /* two or more text links in the nav: the name and the session pill give way here, not at 420px, so the avatar stays on screen */
+  .topbar:has(.nav a:not(.nav-icon):not([hidden]) ~ a:not(.nav-icon):not([hidden])) :is(.brand-name, .session-pill) { display: none; }
 }
 @media (max-width: 420px) {
   .brand-name { display: none; }      /* the mark carries the brand on small phones */

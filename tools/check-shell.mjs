@@ -14,6 +14,13 @@ import { createHash } from "node:crypto";
 import { join, relative, sep, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+/* Every id in index.html must be used once: a heading and a field sharing one silently breaks the field. */
+export function duplicateIds(html) {
+  const seen = new Map();
+  for (const m of html.replace(/<script[\s\S]*?<\/script>/g, "").matchAll(/\sid="([^"]+)"/g)) seen.set(m[1], (seen.get(m[1]) || 0) + 1);
+  return [...seen].filter(([, n]) => n > 1).map(([id]) => id);
+}
+
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 /* The module list in index.html's loader script: var files = ["js/a.js", …]. */
@@ -89,6 +96,7 @@ function run() {
   }
 
   console.log("Page");
+  { const dup = duplicateIds(html); ok(!dup.length, dup.length ? `ids used more than once in index.html: ${dup.join(", ")}` : "every id in index.html is used once"); }
   ok(/setTimeout\(function \(\) \{\s*if \(document\.documentElement\.hasAttribute\("data-booted"\)\)/.test(html), "boot watchdog is in index.html");
   ok(/dataset\.booted\s*=/.test(readFileSync(join(ROOT, "js", "app.js"), "utf8")), "app.js tells the watchdog it started");
   ok(/<main[^>]*\bid="main"/.test(html), "main#main");
