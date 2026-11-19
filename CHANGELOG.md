@@ -9,6 +9,16 @@ or links stop working), add an entry here with the same number and the date,
 and say what changed in the team's words. `npm run check:shell` fails if the
 two numbers differ.
 
+## 1.15.0 · Nov 19, 2026
+
+- **Changed:** the Universe tab shows project briefs from **every department**, not only
+  Account Managers. A brief from another department says which on its card. Invoice
+  requests still come only from Account Managers.
+
+## 1.14.3 · Nov 13, 2026
+
+- Shared design fixes: the top bar now lines up with the page content on pages long enough to scroll (it sat about 7px to the right).
+
 ## 1.14.2 · Nov 12, 2026
 
 - Shared design fixes from the design language, found while reworking Appraisal:

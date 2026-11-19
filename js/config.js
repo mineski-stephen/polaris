@@ -9,7 +9,7 @@
 
 /* version: bump it with every release and add an entry to CHANGELOG.md (newest first, same number).
    The top bar shows it beside the name, so people can see at a glance which version they're running. */
-export const APP = { name: "Polaris", key: "polaris", version: "1.14.2", env: "live" };   // env: "live" | "test"
+export const APP = { name: "Polaris", key: "polaris", version: "1.15.0", env: "live" };   // env: "live" | "test"
 export const ENV_LABEL = APP.env === "test" ? "Test copy" : "";         // shown in the header, never a gate
 
 /* The connection service: the shared Lark proxy (Render). `service` is the name its
@@ -57,9 +57,9 @@ export const TABLES = {
 export const TABLE_LINKS = TABLES[APP.env];
 
 export const RULES = {
-  // Only briefs and invoice requests filed by these departments become cards
-  // ("Sales" is what Account Managers was called before Oct 2025).
-  // ANDON takes briefs from every department.
+  // Only invoice requests filed by these departments become cards ("Sales" is what
+  // Account Managers was called before Oct 2025). Briefs come from every department,
+  // in both the Universe and ANDON tabs; a brief from another department says which.
   departments: ["Account Managers", "Sales"],
 
   // Amount (VAT-Ex.) (PHP) = filed value × (usdRate if USD) ÷ (vatDivisor if 12% VAT).

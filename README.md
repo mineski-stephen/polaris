@@ -153,9 +153,8 @@ All five tables are read **in full**, never through a view (the Universe view in
 the link shows only part of the table; reading through it would make projects
 look missing and get them added twice).
 
-**Project Briefs:** `Initiator department` is *Account Managers* or *Sales* (its
-name before Oct 2025; the same goes for invoice requests everywhere in Polaris),
-`IGNORE` isn't ticked, the `Project Code` isn't in any Universe row, and the status
+**Project Briefs:** from any department (a card from outside Account Managers names
+its department), `IGNORE` isn't ticked, the `Project Code` isn't in any Universe row, and the status
 isn't Rejected, Recalled, Canceled, Deleted or Terminated. Codes are compared
 in canonical form, so `"2025TEG-P0313 "` with a trailing space still counts.
 A card says *Note: looks like "…" (code), already in the Universe* when a Universe
@@ -200,7 +199,8 @@ So one invoice request comes up twice: when it's filed, and again when it's appr
 - **Which project.** The request's typed Project Code, or, when that code isn't in
   the Universe, the project its PAR (*Associated Project Approval*) is on. If the
   two disagree, the card says so.
-- **Not shown:** other departments' requests (unless already on a Collections row:
+- **Not shown:** requests from departments other than *Account Managers* (or *Sales*,
+  its name before Oct 2025) (unless already on a Collections row:
   those are followed whoever filed them), ignored ones, rejected or recalled ones
   that aren't on a row, projects not in the Universe, and **closed or lost
   projects** (*For Closing*, *Fully Closed*, *Lost*, *Stalled*, *Archived*), unless

@@ -290,7 +290,8 @@ export function createInbox(ctx) {
     if (c.kind === "brief" || c.kind === "andon") {
       meta = [c.value !== null ? h("b", null, fmt.money(c.value, c.currency)) : "No contract value",
               c.am.length ? h("span", { title: c.am.map(u => u.name).join(", ") }, ` · AM ${c.am.map(u => u.short).join(", ")}`) : "",
-              c.kind === "andon" && c.department ? ` · ${c.department}` : ""];
+              // ANDON: always; the Universe: only when it isn't Account Managers'
+              c.department && (c.kind === "andon" || !RULES.departments.includes(c.department)) ? ` · ${c.department}` : ""];
       c.problems.forEach(p => notes.push(h("li", { class: "is-plain" }, p)));
       if (c.similar) {
         notes.push(h("li", null, copyableText(`Note: looks like "${c.similar.project}"${c.similar.code ? ` (${c.similar.code})` : ""}, ` +

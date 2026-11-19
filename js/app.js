@@ -456,7 +456,8 @@ function recompute() {
   const d = S.data;
   const uni = indexUniverse(d.universe, { ignoreField: RULES.universeIgnoreField });
   const coll = indexCollections(d.collections);
-  const brief = briefCards(d.brief, uni, RULES);
+  // Every department's briefs (like ANDON); invoice requests stay RULES.departments' only.
+  const brief = briefCards(d.brief, uni, RULES, { allDepartments: true });
   const pending = new Set(brief.cards.map(c => c.code).filter(Boolean));
   S.lists = {
     brief,
